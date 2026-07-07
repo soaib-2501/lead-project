@@ -16,7 +16,6 @@ const PRESETS = {
   },
 };
 
-// value format: "any" | "gt-<num>" | "lt-<num>"
 const RATING_OPTIONS = [
   { value: "any", label: "Rating: Any" },
   { value: "gt-3", label: "Rating > 3" },
@@ -39,16 +38,24 @@ const REVIEWS_OPTIONS = [
   { value: "lt-200", label: "Reviews < 200" },
 ];
 
-// parses "gt-3.5" -> { op: "gt", num: 3.5 }, "any" -> null
 function parseThreshold(val) {
   if (val === "any") return null;
   const [op, num] = val.split("-");
   return { op, num: Number(num) };
 }
 
+// Shared select style — highlighted (blue) when set to a non-default value
+function selectClass(isActive) {
+  return `border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+    isActive
+      ? "border-blue-500 bg-blue-50 text-blue-700 font-medium"
+      : "border-gray-300 bg-white text-gray-700"
+  }`;
+}
+
 export default function FilterPanel({ results, onFilteredChange }) {
-  const [websiteFilter, setWebsiteFilter] = useState("any"); // any | has | none
-  const [phoneFilter, setPhoneFilter] = useState("any");     // any | has | none
+  const [websiteFilter, setWebsiteFilter] = useState("any");
+  const [phoneFilter, setPhoneFilter] = useState("any");
   const [ratingFilter, setRatingFilter] = useState("any");
   const [reviewsFilter, setReviewsFilter] = useState("any");
   const [preset, setPreset] = useState("none");
@@ -84,62 +91,91 @@ export default function FilterPanel({ results, onFilteredChange }) {
     onFilteredChange(filtered);
   };
 
+  const activeCount = [
+    preset !== "none",
+    websiteFilter !== "any",
+    phoneFilter !== "any",
+    ratingFilter !== "any",
+    reviewsFilter !== "any",
+  ].filter(Boolean).length;
+
   if (results.length === 0) return null;
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        gap: "0.6rem",
-        padding: "1rem",
-        marginBottom: "1rem",
-        background: "#f5f5f5",
-        borderRadius: "8px",
-      }}
-    >
-      <select value={preset} onChange={(e) => setPreset(e.target.value)} style={{ padding: "0.4rem" }}>
-        <option value="none">Opportunity preset...</option>
-        {Object.entries(PRESETS)
-          .filter(([k]) => k !== "none")
-          .map(([k, v]) => (
-            <option key={k} value={k}>
-              {v.label}
+    <div className="bg-gray-50 rounded-xl p-4 mb-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <select
+          value={preset}
+          onChange={(e) => setPreset(e.target.value)}
+          className={selectClass(preset !== "none")}
+        >
+          <option value="none">Opportunity preset...</option>
+          {Object.entries(PRESETS)
+            .filter(([k]) => k !== "none")
+            .map(([k, v]) => (
+              <option key={k} value={k}>
+                {v.label}
+              </option>
+            ))}
+        </select>
+
+        <select
+          value={websiteFilter}
+          onChange={(e) => setWebsiteFilter(e.target.value)}
+          className={selectClass(websiteFilter !== "any")}
+        >
+          <option value="any">Website: Any</option>
+          <option value="has">Has Website</option>
+          <option value="none">No Website</option>
+        </select>
+
+        <select
+          value={phoneFilter}
+          onChange={(e) => setPhoneFilter(e.target.value)}
+          className={selectClass(phoneFilter !== "any")}
+        >
+          <option value="any">Phone: Any</option>
+          <option value="has">Has Phone</option>
+          <option value="none">No Phone</option>
+        </select>
+
+        <select
+          value={ratingFilter}
+          onChange={(e) => setRatingFilter(e.target.value)}
+          className={selectClass(ratingFilter !== "any")}
+        >
+          {RATING_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
             </option>
           ))}
-      </select>
+        </select>
 
-      <select value={websiteFilter} onChange={(e) => setWebsiteFilter(e.target.value)} style={{ padding: "0.4rem" }}>
-        <option value="any">Website: Any</option>
-        <option value="has">Has Website</option>
-        <option value="none">No Website</option>
-      </select>
+        <select
+          value={reviewsFilter}
+          onChange={(e) => setReviewsFilter(e.target.value)}
+          className={selectClass(reviewsFilter !== "any")}
+        >
+          {REVIEWS_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
 
-      <select value={phoneFilter} onChange={(e) => setPhoneFilter(e.target.value)} style={{ padding: "0.4rem" }}>
-        <option value="any">Phone: Any</option>
-        <option value="has">Has Phone</option>
-        <option value="none">No Phone</option>
-      </select>
+        <button
+          onClick={applyFilters}
+          className="bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg px-4 py-2 text-sm transition-colors"
+        >
+          Apply Filters
+        </button>
 
-      <select value={ratingFilter} onChange={(e) => setRatingFilter(e.target.value)} style={{ padding: "0.4rem" }}>
-        {RATING_OPTIONS.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
-
-      <select value={reviewsFilter} onChange={(e) => setReviewsFilter(e.target.value)} style={{ padding: "0.4rem" }}>
-        {REVIEWS_OPTIONS.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
-
-      <button  onClick={applyFilters} style={{ padding: "0.4rem 1.2rem" }}>
-        Apply Filters
-      </button>
+        {activeCount > 0 && (
+          <span className="text-xs font-medium text-blue-600 bg-blue-100 rounded-full px-2.5 py-1">
+            {activeCount} filter{activeCount > 1 ? "s" : ""} active
+          </span>
+        )}
+      </div>
     </div>
   );
 }

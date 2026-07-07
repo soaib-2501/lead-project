@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import api from "./services/api";
 import FilterPanel from "./components/FilterPanel";
+import { Search, MapPin, LayoutGrid, Sparkles, Star, Phone, Globe, Clock } from "lucide-react";
 
 function App() {
   const [form, setForm] = useState({
@@ -54,181 +55,284 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 px-4 py-8 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-7xl">
-        <h1 className="text-center text-3xl sm:text-4xl font-bold text-gray-900 mb-8">
-          Lead Search
-        </h1>
+    <div className="relative w-full min-h-screen overflow-hidden bg-gradient-to-br from-indigo-50 via-white to-rose-50">
 
-        {/* Search Form */}
-        <form
-          onSubmit={handleSearch}
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mb-6 bg-white p-4 rounded-xl shadow-sm"
-        >
-          <input
-            name="city"
-            placeholder="City (e.g. Noida)"
-            value={form.city}
-            onChange={handleChange}
-            required
-            className="border rounded-lg px-3 py-2 lg:col-span-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <input
-            name="area"
-            placeholder="Area (optional, e.g. Sector 62)"
-            value={form.area}
-            onChange={handleChange}
-            className="border rounded-lg px-3 py-2 lg:col-span-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <input
-            name="category"
-            placeholder="Category (e.g. restaurant)"
-            value={form.category}
-            onChange={handleChange}
-            required
-            className="border rounded-lg px-3 py-2 lg:col-span-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <input
-            name="keyword"
-            placeholder="Keyword (optional)"
-            value={form.keyword}
-            onChange={handleChange}
-            className="border rounded-lg px-3 py-2 lg:col-span-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <input
-            type="number"
-            name="max_results"
-            placeholder="Max results"
-            value={form.max_results}
-            onChange={handleChange}
-            min={1}
-            max={100}
-            className="border rounded-lg px-3 py-2 lg:col-span-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <button
-            type="submit"
-            disabled={loading}
-            className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white font-medium rounded-lg px-4 py-2 lg:col-span-1 transition-colors"
-          >
-            {loading ? "Searching..." : "Search"}
-          </button>
-        </form>
+      {/* Decorative animated background blobs */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="animate-blob absolute -top-24 -left-24 h-72 w-72 rounded-full bg-indigo-300/30 blur-3xl" />
+        <div
+          className="animate-blob absolute top-1/3 -right-32 h-96 w-96 rounded-full bg-blue-300/30 blur-3xl"
+          style={{ animationDelay: "2s" }}
+        />
+        <div
+          className="animate-blob absolute bottom-0 left-1/4 h-80 w-80 rounded-full bg-rose-200/40 blur-3xl"
+          style={{ animationDelay: "4s" }}
+        />
+      </div>
 
-        {loading && (
-          <p className="text-gray-500 text-sm mb-4">
-            Scraping in progress — this can take 1-3 minutes depending on result count. Please wait.
-          </p>
-        )}
+      <div className="relative px-4 py-10 sm:px-6 lg:px-10">
+        <div className="mx-auto max-w-5xl">
 
-        {error && (
-          <p className="text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-2 mb-4">
-            {error}
-          </p>
-        )}
-
-        {!loading && results.length > 0 && (
-          <>
-            <FilterPanel results={results} onFilteredChange={setFiltered} />
-
-            <p className="text-gray-500 text-sm mb-3">
-              Showing {filtered.length} of {results.length} results
+          {/* Header */}
+          <div className="animate-fade-up flex flex-col items-center text-center mb-10">
+            <div className="flex items-center gap-3">
+              <div className="animate-float animate-glow-pulse flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-blue-600 to-violet-600">
+                <Sparkles className="h-7 w-7 text-white" strokeWidth={2} />
+              </div>
+              <h1 className="animate-gradient bg-gradient-to-r from-slate-900 via-indigo-700 to-slate-900 bg-clip-text text-4xl sm:text-5xl font-extrabold text-transparent tracking-tight">
+                Lead Search
+              </h1>
+            </div>
+            <p className="text-slate-500 text-sm sm:text-base mt-3">
+              Find businesses across any city — fast, filtered, and ready to export.
             </p>
+          </div>
 
-            {/* Desktop/tablet: table view */}
-            <div className="hidden md:block overflow-x-auto bg-white rounded-xl shadow-sm">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left border-b bg-gray-50 text-gray-600">
-                    <th className="p-3">Name</th>
-                    <th className="p-3">Category</th>
-                    <th className="p-3">Address</th>
-                    <th className="p-3">Phone</th>
-                    <th className="p-3">Website</th>
-                    <th className="p-3 text-center">Rating</th>
-                    <th className="p-3 text-center">Reviews</th>
-                    <th className="p-3 min-w-[220px]">Opening Hours</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((biz, idx) => {
-                    const hoursList = formatOpeningHours(biz.opening_hours);
-                    return (
-                      <tr key={idx} className="border-b align-top hover:bg-gray-50">
-                        <td className="p-3 font-semibold text-gray-900">{biz.name}</td>
-                        <td className="p-3 text-gray-700">{biz.category || "-"}</td>
-                        <td className="p-3 text-gray-700">{biz.address || "-"}</td>
-                        <td className="p-3 text-gray-700">{biz.phone || "-"}</td>
-                        <td className="p-3">
-                          {biz.website ? (
-                            <a href={biz.website} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
-                              Visit
-                            </a>
-                          ) : (
-                            "-"
-                          )}
-                        </td>
-                        <td className="p-3 text-center">
-                          {biz.rating !== null && biz.rating !== undefined ? `⭐ ${biz.rating}` : "N/A"}
-                        </td>
-                        <td className="p-3 text-center">{biz.reviews}</td>
-                        <td className="p-3 text-xs text-gray-600">
-                          {hoursList ? (
-                            <ul className="list-disc list-inside space-y-0.5">
-                              {hoursList.map((line, i) => (
-                                <li key={i}>{line}</li>
-                              ))}
-                            </ul>
-                          ) : (
-                            "N/A"
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+          {/* Search Card */}
+          <form
+            onSubmit={handleSearch}
+            className="animate-fade-up bg-white/80 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-100 border border-white/60 p-5 sm:p-8 mb-8"
+            style={{ animationDelay: "0.1s" }}
+          >
+            {/* Keyword */}
+            <div className="relative mb-6 group">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 transition-colors group-focus-within:text-indigo-500" />
+              <input
+                name="keyword"
+                placeholder="Keyword (optional)"
+                value={form.keyword}
+                onChange={handleChange}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50/80 pl-11 pr-4 py-3.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent focus:bg-white transition-all"
+              />
             </div>
 
-            {/* Mobile: card view */}
-            <div className="md:hidden space-y-3">
-              {filtered.map((biz, idx) => {
-                const hoursList = formatOpeningHours(biz.opening_hours);
-                return (
-                  <div key={idx} className="bg-white rounded-xl shadow-sm p-4">
-                    <p className="font-semibold text-gray-900 mb-1">{biz.name}</p>
-                    <p className="text-sm text-gray-600 mb-1">{biz.category || "-"}</p>
-                    <p className="text-sm text-gray-600 mb-1">{biz.address || "-"}</p>
-                    <p className="text-sm text-gray-600 mb-1">{biz.phone || "-"}</p>
-                    <div className="flex items-center gap-3 text-sm mb-2">
-                      <span>{biz.rating !== null && biz.rating !== undefined ? `⭐ ${biz.rating}` : "N/A"}</span>
-                      <span className="text-gray-500">{biz.reviews} reviews</span>
-                      {biz.website && (
-                        <a href={biz.website} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
-                          Visit
-                        </a>
+            {/* City + Category */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mb-6">
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-50">
+                    <MapPin className="h-4 w-4 text-indigo-600" />
+                  </span>
+                  <span className="text-sm font-semibold text-slate-800">Choose city</span>
+                </div>
+                <input
+                  name="city"
+                  placeholder="Noida, Delhi, Mumbai..."
+                  value={form.city}
+                  onChange={handleChange}
+                  required
+                  className="w-full rounded-xl border border-slate-200 px-4 py-3.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition-all"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-50">
+                    <LayoutGrid className="h-4 w-4 text-indigo-600" />
+                  </span>
+                  <span className="text-sm font-semibold text-slate-800">Select category</span>
+                </div>
+                <input
+                  name="category"
+                  placeholder="Restaurants, Gyms, Clinics..."
+                  value={form.category}
+                  onChange={handleChange}
+                  required
+                  className="w-full rounded-xl border border-slate-200 px-4 py-3.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition-all"
+                />
+              </div>
+            </div>
+
+            {/* Area + Max results */}
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_140px] gap-3 mb-7">
+              <input
+                name="area"
+                placeholder="Area (optional, e.g. Sector 62)"
+                value={form.area}
+                onChange={handleChange}
+                className="w-full rounded-xl border border-slate-200 px-4 py-3.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition-all"
+              />
+              <input
+                type="number"
+                name="max_results"
+                placeholder="Max results"
+                value={form.max_results}
+                onChange={handleChange}
+                min={1}
+                max={100}
+                className="w-full rounded-xl border border-slate-200 px-4 py-3.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition-all"
+              />
+            </div>
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 via-blue-600 to-violet-600 hover:shadow-xl hover:shadow-indigo-300/50 hover:-translate-y-0.5 disabled:opacity-60 disabled:cursor-not-allowed disabled:translate-y-0 text-white font-semibold text-sm px-4 py-4 shadow-lg shadow-indigo-200 transition-all duration-200"
+            >
+              <Sparkles className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              {loading ? "Searching..." : "Start smart search"}
+            </button>
+          </form>
+
+          {/* Status messages */}
+          {loading && (
+            <p className="animate-fade-up text-slate-500 text-sm mb-4 text-center">
+              Scraping in progress — this can take 1–3 minutes depending on result count. Please wait.
+            </p>
+          )}
+
+          {error && (
+            <p className="animate-fade-up text-red-600 bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-6 text-sm text-center">
+              {error}
+            </p>
+          )}
+
+          {/* Results */}
+          {!loading && results.length > 0 && (
+            <div className="animate-fade-up">
+              <FilterPanel results={results} onFilteredChange={setFiltered} />
+
+              <p className="text-slate-500 text-sm mb-4">
+                Showing <span className="font-semibold text-slate-700">{filtered.length}</span> of{" "}
+                <span className="font-semibold text-slate-700">{results.length}</span> results
+              </p>
+
+              {/* Desktop/tablet: table view */}
+              <div className="hidden md:block overflow-x-auto bg-white/90 backdrop-blur rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left border-b border-slate-100 bg-slate-50/80 text-slate-500 uppercase text-xs tracking-wide">
+                      <th className="p-4 font-semibold">Name</th>
+                      <th className="p-4 font-semibold">Category</th>
+                      <th className="p-4 font-semibold">Address</th>
+                      <th className="p-4 font-semibold">Phone</th>
+                      <th className="p-4 font-semibold">Website</th>
+                      <th className="p-4 font-semibold text-center">Rating</th>
+                      <th className="p-4 font-semibold text-center">Reviews</th>
+                      <th className="p-4 font-semibold min-w-[220px]">Opening Hours</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((biz, idx) => {
+                      const hoursList = formatOpeningHours(biz.opening_hours);
+                      return (
+                        <tr key={idx} className="border-b border-slate-50 align-top hover:bg-indigo-50/40 transition-colors">
+                          <td className="p-4 font-semibold text-slate-900">{biz.name}</td>
+                          <td className="p-4 text-slate-600">{biz.category || "-"}</td>
+                          <td className="p-4 text-slate-600 max-w-xs">{biz.address || "-"}</td>
+                          <td className="p-4 text-slate-600 whitespace-nowrap">{biz.phone || "-"}</td>
+                          <td className="p-4">
+                            {biz.website ? (
+                              <a
+                                href={biz.website}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium"
+                              >
+                                <Globe className="h-3.5 w-3.5" /> Visit
+                              </a>
+                            ) : (
+                              "-"
+                            )}
+                          </td>
+                          <td className="p-4 text-center whitespace-nowrap">
+                            {biz.rating !== null && biz.rating !== undefined ? (
+                              <span className="inline-flex items-center gap-1 text-amber-600 font-medium">
+                                <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" /> {biz.rating}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">N/A</span>
+                            )}
+                          </td>
+                          <td className="p-4 text-center text-slate-600">{biz.reviews}</td>
+                          <td className="p-4 text-xs text-slate-500">
+                            {hoursList ? (
+                              <ul className="space-y-0.5">
+                                {hoursList.map((line, i) => (
+                                  <li key={i} className="flex items-start gap-1">
+                                    <Clock className="h-3 w-3 mt-0.5 shrink-0 text-slate-400" />
+                                    <span>{line}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              "N/A"
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile: card view */}
+              <div className="md:hidden space-y-4">
+                {filtered.map((biz, idx) => {
+                  const hoursList = formatOpeningHours(biz.opening_hours);
+                  return (
+                    <div key={idx} className="bg-white/90 backdrop-blur rounded-2xl shadow-lg shadow-slate-200/50 border border-slate-100 p-4">
+                      <p className="font-semibold text-slate-900 mb-1">{biz.name}</p>
+                      <p className="text-sm text-slate-500 mb-2">{biz.category || "-"}</p>
+
+                      <div className="space-y-1.5 mb-3">
+                        <p className="text-sm text-slate-600 flex items-start gap-2">
+                          <MapPin className="h-4 w-4 mt-0.5 shrink-0 text-slate-400" />
+                          <span>{biz.address || "-"}</span>
+                        </p>
+                        <p className="text-sm text-slate-600 flex items-center gap-2">
+                          <Phone className="h-4 w-4 shrink-0 text-slate-400" />
+                          <span>{biz.phone || "-"}</span>
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-3 text-sm mb-2">
+                        {biz.rating !== null && biz.rating !== undefined ? (
+                          <span className="inline-flex items-center gap-1 text-amber-600 font-medium">
+                            <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" /> {biz.rating}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">N/A</span>
+                        )}
+                        <span className="text-slate-500">{biz.reviews} reviews</span>
+                        {biz.website && (
+                          <a
+                            href={biz.website}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-indigo-600 font-medium"
+                          >
+                            <Globe className="h-3.5 w-3.5" /> Visit
+                          </a>
+                        )}
+                      </div>
+
+                      {hoursList && (
+                        <ul className="text-xs text-slate-500 space-y-0.5 border-t border-slate-100 pt-2 mt-2">
+                          {hoursList.map((line, i) => (
+                            <li key={i} className="flex items-start gap-1">
+                              <Clock className="h-3 w-3 mt-0.5 shrink-0 text-slate-400" />
+                              <span>{line}</span>
+                            </li>
+                          ))}
+                        </ul>
                       )}
                     </div>
-                    {hoursList && (
-                      <ul className="text-xs text-gray-500 list-disc list-inside space-y-0.5">
-                        {hoursList.map((line, i) => (
-                          <li key={i}>{line}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
+
+              {filtered.length === 0 && (
+                <p className="text-slate-400 mt-6 text-center">No results match these filters.</p>
+              )}
             </div>
+          )}
 
-            {filtered.length === 0 && (
-              <p className="text-gray-400 mt-4 text-center">No results match these filters.</p>
-            )}
-          </>
-        )}
-
-        {!loading && !error && results.length === 0 && (
-          <p className="text-gray-400 text-center">No results yet — run a search above.</p>
-        )}
+          {!loading && !error && results.length === 0 && (
+            <p className="text-slate-400 text-center">No results yet — run a search above.</p>
+          )}
+        </div>
       </div>
     </div>
   );
