@@ -7,7 +7,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import search
+from app.api import search, business
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ app.add_middleware(
 )
 
 app.include_router(search.router)
+app.include_router(business.router)
 
 
 @app.on_event("startup")

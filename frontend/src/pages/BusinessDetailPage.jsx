@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -10,8 +11,10 @@ import {
   Tag,
   MessageSquareText,
   ImageOff,
+  Loader2,
 } from "lucide-react";
 import { useSearchContext } from "../context/SearchContext";
+import api from "../services/api";
 
 const SOCIAL_STYLE = {
   facebook: "text-blue-600 bg-blue-50 hover:bg-blue-100",
@@ -32,6 +35,44 @@ function BusinessDetailPage() {
     filtered.find(
       (b) => encodeURIComponent(b.name.toLowerCase().replace(/\s+/g, "-")) === slug
     );
+
+  // Lazy-loaded extras: social links + extra website images (logo/og/gallery).
+  // Maps photos (biz.images) are already available instantly from the search
+  // results, so the Photos section is never empty on first render — this
+  // fetch only adds to it.
+  const [extraDetail, setExtraDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState(false);
+
+  useEffect(() => {
+    if (!biz?.website) {
+      setExtraDetail(null);
+      return;
+    }
+
+    let cancelled = false;
+    setDetailLoading(true);
+    setDetailError(false);
+
+    api
+      .get("/api/business-detail", { params: { website: biz.website } })
+      .then((res) => {
+        if (!cancelled) setExtraDetail(res.data);
+      })
+      .catch((err) => {
+        console.error("[BusinessDetailPage] Failed to fetch extra detail:", err);
+        if (!cancelled) setDetailError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // Re-fetch whenever the viewed business changes (Prev/Next navigation)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [biz?.website]);
 
   const currentIndex = biz ? filtered.findIndex((b) => b.place_id === biz.place_id) : -1;
   const prevBiz = currentIndex > 0 ? filtered[currentIndex - 1] : null;
@@ -66,6 +107,16 @@ function BusinessDetailPage() {
   const hoursList = biz.opening_hours
     ? biz.opening_hours.split("|").map((line) => line.trim()).filter(Boolean)
     : null;
+
+  // Merge Maps photos (instant) with lazily-fetched website images, deduped.
+  const mapsImages = biz.images || [];
+  const extraImages = extraDetail
+    ? [extraDetail.logo, extraDetail.og_image, ...(extraDetail.gallery || [])].filter(Boolean)
+    : [];
+  const allImages = [...mapsImages, ...extraImages.filter((img) => !mapsImages.includes(img))];
+
+  const socialLinks = extraDetail?.social_links || {};
+  const hasSocialLinks = Object.keys(socialLinks).length > 0;
 
   return (
     <div className="relative w-full min-h-screen overflow-hidden bg-gradient-to-br from-indigo-50 via-white to-rose-50">
@@ -166,15 +217,22 @@ function BusinessDetailPage() {
           </div>
 
           <div className="bg-white/90 backdrop-blur rounded-2xl shadow-md shadow-slate-200/50 border border-slate-100 p-5 sm:p-6 mb-6">
-            <div className="flex items-center gap-2 mb-4">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50">
-                <ImageOff className="h-4 w-4 text-indigo-600" />
-              </span>
-              <span className="text-sm font-semibold text-slate-800">Photos</span>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50">
+                  <ImageOff className="h-4 w-4 text-indigo-600" />
+                </span>
+                <span className="text-sm font-semibold text-slate-800">Photos</span>
+              </div>
+              {detailLoading && biz.website && (
+                <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading more from website...
+                </span>
+              )}
             </div>
-            {biz.images && biz.images.length > 0 ? (
+            {allImages.length > 0 ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {biz.images.map((src, i) => (
+                {allImages.map((src, i) => (
                   <a
                     key={i}
                     href={src}
@@ -193,34 +251,52 @@ function BusinessDetailPage() {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-slate-400">No photos available for this business.</p>
+              <p className="text-sm text-slate-400">
+                {detailLoading ? "Checking the business website for photos..." : "No photos available for this business."}
+              </p>
             )}
           </div>
 
-          {biz.social_links && Object.keys(biz.social_links).length > 0 && (
+          {biz.website && (
             <div className="bg-white/90 backdrop-blur rounded-2xl shadow-md shadow-slate-200/50 border border-slate-100 p-5 sm:p-6 mb-6">
-              <div className="flex items-center gap-2 mb-4">
-                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50">
-                  <Globe className="h-4 w-4 text-indigo-600" />
-                </span>
-                <span className="text-sm font-semibold text-slate-800">Social media</span>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50">
+                    <Globe className="h-4 w-4 text-indigo-600" />
+                  </span>
+                  <span className="text-sm font-semibold text-slate-800">Social media</span>
+                </div>
+                {detailLoading && (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking...
+                  </span>
+                )}
               </div>
-              <div className="flex flex-wrap gap-3">
-                {Object.entries(biz.social_links).map(([platform, url]) => {
-                  const style = SOCIAL_STYLE[platform] || "text-slate-600 bg-slate-50 hover:bg-slate-100";
-                  return (
-                    <a
-                      key={platform}
-                      href={url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className={`inline-flex items-center gap-2 rounded-xl border border-transparent px-4 py-2.5 text-sm font-medium capitalize transition-colors ${style}`}
-                    >
-                      <Globe className="h-4 w-4" /> {platform}
-                    </a>
-                  );
-                })}
-              </div>
+
+              {hasSocialLinks ? (
+                <div className="flex flex-wrap gap-3">
+                  {Object.entries(socialLinks).map(([platform, url]) => {
+                    const style = SOCIAL_STYLE[platform] || "text-slate-600 bg-slate-50 hover:bg-slate-100";
+                    return (
+                      <a
+                        key={platform}
+                        href={url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={`inline-flex items-center gap-2 rounded-xl border border-transparent px-4 py-2.5 text-sm font-medium capitalize transition-colors ${style}`}
+                      >
+                        <Globe className="h-4 w-4" /> {platform}
+                      </a>
+                    );
+                  })}
+                </div>
+              ) : !detailLoading ? (
+                <p className="text-sm text-slate-400">
+                  {detailError
+                    ? "Couldn't check the website for social links."
+                    : "No social media links found on this business's website."}
+                </p>
+              ) : null}
             </div>
           )}
 
