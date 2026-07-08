@@ -4,6 +4,8 @@ import time
 
 from playwright.sync_api import sync_playwright
 
+from app.services.social_scraper import extract_site_intel
+
 logger = logging.getLogger(__name__)
 
 
@@ -296,12 +298,29 @@ def scrape(query: str, max_results: int = 20) -> list[dict]:
                 except Exception:
                     website = ""
 
-                # NOTE: social links + website images are NOT fetched here anymore.
-                # That requires visiting each business's own website (slow, can hang
-                # on dead/slow sites) and was making bulk search take minutes even for
-                # 5 results. It's now fetched lazily via /api/business-detail only
-                # when the user opens a specific business's detail page.
+                # Social links + brand images come from the business's own
+                # website, not Maps — a separate fetch that can fail
+                # independently (site down, no website, blocks bots). It
+                # must never take down the rest of the scrape, so it gets
+                # its own try/except here.
+                social_links = {}
+                website_images = {"og_image": None, "favicon": None, "logo": None, "gallery": []}
+                if website:
+                    try:
+                        intel = extract_site_intel(website)
+                        social_links = intel["social_links"]
+                        website_images = intel["images"]
+                    except Exception as e:
+                        logger.info(f"[scrape] Site intel extraction failed for {website}: {e}")
+
+                # Merge image sources: Maps listing photos first (usually
+                # higher quality, actual venue photos), then the website's
+                # own logo/og-image/gallery as a fallback/supplement —
+                # deduplicated while preserving order.
                 combined_images = list(maps_images)
+                for extra in [website_images["logo"], website_images["og_image"], *website_images["gallery"]]:
+                    if extra and extra not in combined_images:
+                        combined_images.append(extra)
 
                 if name:
                     data.append({
@@ -315,12 +334,12 @@ def scrape(query: str, max_results: int = 20) -> list[dict]:
                         "reviews": parse_reviews(raw_reviews),
                         "opening_hours": opening_hours,
                         "images": combined_images,
-                        "favicon": None,
-                        "social_links": {},
+                        "favicon": website_images["favicon"],
+                        "social_links": social_links,
                     })
                     logger.info(
                         f"[scrape] ({idx}/{min(len(collected_hrefs), max_results)}) Scraped: {name} "
-                        f"— {len(combined_images)} images"
+                        f"— {len(combined_images)} images, {len(social_links)} social links"
                     )
                 else:
                     logger.warning(f"[scrape] ({idx}/{min(len(collected_hrefs), max_results)}) No name found, skipping: {href}")
