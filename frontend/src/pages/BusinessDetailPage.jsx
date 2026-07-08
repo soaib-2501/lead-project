@@ -1,6 +1,7 @@
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
+  ArrowRight,
   MapPin,
   Phone,
   Globe,
@@ -10,12 +11,8 @@ import {
   MessageSquareText,
   ImageOff,
 } from "lucide-react";
+import { useSearchContext } from "../context/SearchContext";
 
-// lucide-react doesn't ship brand/company logos (Facebook, Instagram, etc.)
-// in current versions — only generic icons. Rather than depend on a brand
-// icon set that can change or vanish between versions, each platform gets
-// a plain Globe icon plus its own color, so it's still visually distinct
-// without a fragile import.
 const SOCIAL_STYLE = {
   facebook: "text-blue-600 bg-blue-50 hover:bg-blue-100",
   instagram: "text-pink-600 bg-pink-50 hover:bg-pink-100",
@@ -28,12 +25,24 @@ function BusinessDetailPage() {
   const { slug } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const biz = location.state?.business;
+  const { filtered } = useSearchContext();
 
-  // Data travels via router state (set when the user clicks a result on the
-  // search page). If someone lands here directly — a refresh, a shared link,
-  // browser back/forward losing state — there's no backend lookup to fall
-  // back on yet, so we show a clear way back instead of a blank/broken page.
+  const biz =
+    location.state?.business ||
+    filtered.find(
+      (b) => encodeURIComponent(b.name.toLowerCase().replace(/\s+/g, "-")) === slug
+    );
+
+  const currentIndex = biz ? filtered.findIndex((b) => b.place_id === biz.place_id) : -1;
+  const prevBiz = currentIndex > 0 ? filtered[currentIndex - 1] : null;
+  const nextBiz = currentIndex >= 0 && currentIndex < filtered.length - 1 ? filtered[currentIndex + 1] : null;
+
+  const goTo = (target) => {
+    if (!target) return;
+    const targetSlug = encodeURIComponent(target.name.toLowerCase().replace(/\s+/g, "-"));
+    navigate(`/business/${targetSlug}`, { state: { business: target } });
+  };
+
   if (!biz) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-50 via-white to-rose-50 px-4">
@@ -67,14 +76,21 @@ function BusinessDetailPage() {
 
       <div className="relative px-4 py-8 sm:px-6 lg:px-10">
         <div className="mx-auto max-w-3xl">
-          <button
-            onClick={() => navigate(-1)}
-            className="inline-flex items-center gap-2 text-slate-500 hover:text-indigo-600 text-sm font-medium mb-6 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400 rounded"
-          >
-            <ArrowLeft className="h-4 w-4" /> Back to results
-          </button>
+          <div className="flex items-center justify-between mb-6">
+            <button
+              onClick={() => navigate("/")}
+              className="inline-flex items-center gap-2 text-slate-500 hover:text-indigo-600 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400 rounded"
+            >
+              <ArrowLeft className="h-4 w-4" /> Back to results
+            </button>
 
-          {/* Header card */}
+            {filtered.length > 0 && currentIndex >= 0 && (
+              <span className="text-xs text-slate-400">
+                {currentIndex + 1} of {filtered.length}
+              </span>
+            )}
+          </div>
+
           <div className="bg-white/90 backdrop-blur-xl rounded-3xl shadow-xl shadow-indigo-100 border border-white/60 p-6 sm:p-8 mb-6">
             <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
               <div>
@@ -100,7 +116,6 @@ function BusinessDetailPage() {
             </div>
           </div>
 
-          {/* Contact info grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
             <div className="bg-white/90 backdrop-blur rounded-2xl shadow-md shadow-slate-200/50 border border-slate-100 p-5">
               <div className="flex items-center gap-2 mb-2">
@@ -150,7 +165,6 @@ function BusinessDetailPage() {
             </div>
           </div>
 
-          {/* Photo gallery */}
           <div className="bg-white/90 backdrop-blur rounded-2xl shadow-md shadow-slate-200/50 border border-slate-100 p-5 sm:p-6 mb-6">
             <div className="flex items-center gap-2 mb-4">
               <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50">
@@ -183,7 +197,6 @@ function BusinessDetailPage() {
             )}
           </div>
 
-          {/* Social links */}
           {biz.social_links && Object.keys(biz.social_links).length > 0 && (
             <div className="bg-white/90 backdrop-blur rounded-2xl shadow-md shadow-slate-200/50 border border-slate-100 p-5 sm:p-6 mb-6">
               <div className="flex items-center gap-2 mb-4">
@@ -211,7 +224,6 @@ function BusinessDetailPage() {
             </div>
           )}
 
-          {/* Opening hours */}
           {hoursList && hoursList.length > 0 && (
             <div className="bg-white/90 backdrop-blur rounded-2xl shadow-md shadow-slate-200/50 border border-slate-100 p-5 sm:p-6 mb-6">
               <div className="flex items-center gap-2 mb-4">
@@ -234,12 +246,31 @@ function BusinessDetailPage() {
           )}
 
           {!biz.website && !biz.phone && (
-            <div className="bg-amber-50 border border-amber-100 rounded-2xl p-5 flex items-start gap-3">
+            <div className="bg-amber-50 border border-amber-100 rounded-2xl p-5 flex items-start gap-3 mb-6">
               <MessageSquareText className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
               <p className="text-sm text-amber-700">
                 This business has no listed website or phone number — that often makes it a
                 strong lead for outreach.
               </p>
+            </div>
+          )}
+
+          {(prevBiz || nextBiz) && (
+            <div className="flex items-center justify-between gap-3">
+              <button
+                onClick={() => goTo(prevBiz)}
+                disabled={!prevBiz}
+                className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-white/90 backdrop-blur border border-slate-100 shadow-md shadow-slate-200/50 px-4 py-3 text-sm font-medium text-slate-600 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                <ArrowLeft className="h-4 w-4" /> Previous
+              </button>
+              <button
+                onClick={() => goTo(nextBiz)}
+                disabled={!nextBiz}
+                className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-white/90 backdrop-blur border border-slate-100 shadow-md shadow-slate-200/50 px-4 py-3 text-sm font-medium text-slate-600 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                Next <ArrowRight className="h-4 w-4" />
+              </button>
             </div>
           )}
         </div>
