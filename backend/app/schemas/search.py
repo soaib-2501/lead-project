@@ -1,5 +1,6 @@
-from pydantic import BaseModel
 from typing import Optional
+
+from pydantic import BaseModel
 
 
 class SearchRequest(BaseModel):
@@ -20,3 +21,6 @@ class BusinessOut(BaseModel):
     rating: Optional[float] = None
     reviews: int = 0
     opening_hours: Optional[str] = None
+    images: list[str] = []
+    favicon: Optional[str] = None
+    social_links: dict[str, str] = {}

@@ -4,6 +4,8 @@ import time
 
 from playwright.sync_api import sync_playwright
 
+from app.services.social_scraper import extract_site_intel
+
 logger = logging.getLogger(__name__)
 
 
@@ -11,7 +13,6 @@ def clean_text(text: str) -> str:
     """Strip emoji/icon characters and extra whitespace that Google Maps embeds in text nodes."""
     if not text:
         return ""
-    # Remove non-ASCII symbols (icons/emoji) but keep normal punctuation
     cleaned = re.sub(r"[^\x00-\x7F]+", "", text)
     return cleaned.strip(" \n\t-")
 
@@ -69,7 +70,6 @@ def get_rating_and_reviews(detail_page):
 
 
 def parse_rating(raw: str):
-    """Convert raw rating string ('4.5') to float, or None if missing/invalid."""
     if not raw:
         return None
     try:
@@ -79,7 +79,6 @@ def parse_rating(raw: str):
 
 
 def parse_reviews(raw: str):
-    """Convert raw review-count string ('468') to int, defaulting to 0."""
     if not raw:
         return 0
     try:
@@ -135,8 +134,57 @@ def get_opening_hours(detail_page):
     return ""
 
 
+def get_images(detail_page, max_images: int = 6):
+    """
+    Collects listing photo URLs from the business's Google Maps page.
+
+    Google lazy-loads the photo strip: only the first (hero) photo has a
+    real src on initial load, the rest carry a placeholder until scrolled
+    into view. We nudge the page with a few small scroll/wait cycles first
+    to force those thumbnails to swap in their real src before reading it.
+
+    We also check data-src/data-lazy-src as a fallback, since some lazy-load
+    implementations keep the real URL there until the src swap happens, and
+    we validate that whatever we capture actually looks like a complete
+    Google-hosted image URL rather than a lazy-load placeholder stub.
+    """
+    images = []
+
+    for _ in range(4):
+        try:
+            detail_page.mouse.wheel(0, 400)
+        except Exception:
+            break
+        detail_page.wait_for_timeout(500)
+
+    try:
+        imgs = detail_page.locator("img")
+        count = imgs.count()
+        for i in range(count):
+            try:
+                el = imgs.nth(i)
+                src = el.get_attribute("src") or ""
+                if "googleusercontent.com" not in src:
+                    src = el.get_attribute("data-src") or el.get_attribute("data-lazy-src") or ""
+            except Exception:
+                continue
+
+            if (
+                src.startswith("http")
+                and "googleusercontent.com" in src
+                and src not in images
+            ):
+                images.append(src)
+
+            if len(images) >= max_images:
+                break
+    except Exception:
+        pass
+
+    return images
+
+
 def build_query(city: str, area: str, category: str, keyword: str = None) -> str:
-    """Builds a single Google Maps search query string from form inputs."""
     parts = []
     if keyword:
         parts.append(keyword)
@@ -240,6 +288,7 @@ def scrape(query: str, max_results: int = 20) -> list[dict]:
                 category = get_category(detail_page)
                 raw_rating, raw_reviews = get_rating_and_reviews(detail_page)
                 opening_hours = get_opening_hours(detail_page)
+                maps_images = get_images(detail_page)
 
                 try:
                     raw_website = detail_page.locator(
@@ -249,6 +298,30 @@ def scrape(query: str, max_results: int = 20) -> list[dict]:
                 except Exception:
                     website = ""
 
+                # Social links + brand images come from the business's own
+                # website, not Maps — a separate fetch that can fail
+                # independently (site down, no website, blocks bots). It
+                # must never take down the rest of the scrape, so it gets
+                # its own try/except here.
+                social_links = {}
+                website_images = {"og_image": None, "favicon": None, "logo": None, "gallery": []}
+                if website:
+                    try:
+                        intel = extract_site_intel(website)
+                        social_links = intel["social_links"]
+                        website_images = intel["images"]
+                    except Exception as e:
+                        logger.info(f"[scrape] Site intel extraction failed for {website}: {e}")
+
+                # Merge image sources: Maps listing photos first (usually
+                # higher quality, actual venue photos), then the website's
+                # own logo/og-image/gallery as a fallback/supplement —
+                # deduplicated while preserving order.
+                combined_images = list(maps_images)
+                for extra in [website_images["logo"], website_images["og_image"], *website_images["gallery"]]:
+                    if extra and extra not in combined_images:
+                        combined_images.append(extra)
+
                 if name:
                     data.append({
                         "place_id": href,
@@ -257,11 +330,17 @@ def scrape(query: str, max_results: int = 20) -> list[dict]:
                         "address": address,
                         "phone": phone,
                         "website": website,
-                        "rating": parse_rating(raw_rating),      # float or None
-                        "reviews": parse_reviews(raw_reviews),   # int, default 0
+                        "rating": parse_rating(raw_rating),
+                        "reviews": parse_reviews(raw_reviews),
                         "opening_hours": opening_hours,
+                        "images": combined_images,
+                        "favicon": website_images["favicon"],
+                        "social_links": social_links,
                     })
-                    logger.info(f"[scrape] ({idx}/{min(len(collected_hrefs), max_results)}) Scraped: {name}")
+                    logger.info(
+                        f"[scrape] ({idx}/{min(len(collected_hrefs), max_results)}) Scraped: {name} "
+                        f"— {len(combined_images)} images, {len(social_links)} social links"
+                    )
                 else:
                     logger.warning(f"[scrape] ({idx}/{min(len(collected_hrefs), max_results)}) No name found, skipping: {href}")
 
