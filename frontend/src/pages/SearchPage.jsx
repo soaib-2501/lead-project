@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import api from "../services/api";
 import FilterPanel from "../components/FilterPanel";
 import { useSearchContext } from "../context/SearchContext";
-import { Search, MapPin, LayoutGrid, Sparkles, Star, Phone, Globe, Clock } from "lucide-react";
+import { Search, MapPin, LayoutGrid, Sparkles, Star, Phone, Globe, Clock, Loader2 } from "lucide-react";
 
 function SearchPage() {
   const navigate = useNavigate();
@@ -26,29 +26,109 @@ function SearchPage() {
     setForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleSearch = async (e) => {
+  const handleSearch = (e) => {
     e.preventDefault();
     setLoading(true);
     setError("");
     setResults([]);
 
-    try {
-      const response = await api.post("/api/search", {
-        ...form,
-        max_results: Number(form.max_results),
-      });
-      setResults(response.data);
-    } catch (err) {
-      console.error("[SearchPage] Search failed:", err);
-      setError("Search failed. Backend not reachable or scraping error occurred.");
-    } finally {
+    // EventSource (Server-Sent Events) instead of a single api.post() call.
+    // The backend now yields each business the moment it's scraped, instead
+    // of waiting for the whole batch — so results appear in the table live,
+    // one by one, instead of everything showing up at once after 1-3 minutes.
+    //
+    // EventSource only supports GET with no custom body, so search params
+    // travel as a query string. We reuse the same base URL as the axios
+    // `api` instance so this points at the same backend it's configured for.
+    const params = new URLSearchParams({
+      city: form.city,
+      category: form.category,
+      max_results: String(form.max_results),
+    });
+    if (form.area) params.set("area", form.area);
+    if (form.keyword) params.set("keyword", form.keyword);
+
+    const base = api.defaults.baseURL || "";
+    const streamUrl = `${base}/api/search/stream?${params.toString()}`;
+
+    const source = new EventSource(streamUrl);
+
+    source.addEventListener("business", (event) => {
+      const biz = JSON.parse(event.data);
+      setResults((prev) => [...prev, biz]);
+    });
+
+    source.addEventListener("done", () => {
       setLoading(false);
-    }
+      source.close();
+    });
+
+    // EventSource fires a plain "error" event both for our custom SSE
+    // "error" message AND for real connection failures (backend down,
+    // network drop). Custom messages always carry event.data; connection
+    // failures don't — that's how we tell the two apart.
+    source.addEventListener("error", (event) => {
+      if (event.data) {
+        try {
+          const payload = JSON.parse(event.data);
+          console.error("[SearchPage] Stream reported an error:", payload.message);
+        } catch {
+          // ignore parse failure, fall through to generic message below
+        }
+      } else {
+        console.error("[SearchPage] EventSource connection error", event);
+      }
+      setError("Search failed. Backend not reachable or scraping error occurred.");
+      setLoading(false);
+      source.close();
+    });
+  };
+
+  // Groups consecutive days that share the exact same hours into a single
+  // "Mon-Fri: 7:30am - 11pm" line instead of listing all 7 days separately.
+  const DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const DAY_ABBR = {
+    Monday: "Mon", Tuesday: "Tue", Wednesday: "Wed", Thursday: "Thu",
+    Friday: "Fri", Saturday: "Sat", Sunday: "Sun",
   };
 
   const formatOpeningHours = (raw) => {
     if (!raw) return null;
-    return raw.split("|").map((line) => line.trim()).filter(Boolean);
+    const lines = raw.split("|").map((line) => line.trim()).filter(Boolean);
+    if (lines.length === 0) return null;
+
+    const parsed = lines.map((line) => {
+      const day = DAY_ORDER.find((d) => line.startsWith(d));
+      return day ? { day, time: line.slice(day.length).trim() } : { day: null, time: line };
+    });
+
+    if (parsed.every((p) => !p.day)) return lines;
+
+    const byDay = {};
+    parsed.forEach((p) => {
+      if (p.day) byDay[p.day] = p.time;
+    });
+    const ordered = DAY_ORDER
+      .map((day, index) => ({ day, index, time: byDay[day] }))
+      .filter((d) => d.time !== undefined);
+
+    if (ordered.length === 0) return lines;
+
+    const groups = [];
+    ordered.forEach(({ day, index, time }) => {
+      const last = groups[groups.length - 1];
+      if (last && last.time === time && index === last.endIndex + 1) {
+        last.endDay = day;
+        last.endIndex = index;
+      } else {
+        groups.push({ startDay: day, endDay: day, endIndex: index, time });
+      }
+    });
+
+    return groups.map(({ startDay, endDay, time }) => {
+      const label = startDay === endDay ? DAY_ABBR[startDay] : `${DAY_ABBR[startDay]}-${DAY_ABBR[endDay]}`;
+      return `${label}: ${time}`;
+    });
   };
 
   const goToDetail = (biz) => {
@@ -168,9 +248,10 @@ function SearchPage() {
             </button>
           </form>
 
-          {loading && (
+          {/* Shown only before the FIRST result has arrived */}
+          {loading && results.length === 0 && (
             <p className="animate-fade-up text-slate-500 text-sm mb-4 text-center">
-              Scraping in progress — this can take 1–3 minutes depending on result count. Please wait.
+              Scraping in progress — results will appear below as they're found. Please wait.
             </p>
           )}
 
@@ -180,13 +261,18 @@ function SearchPage() {
             </p>
           )}
 
-          {!loading && results.length > 0 && (
+          {/* Results now render as soon as the first business arrives, even
+              while `loading` is still true — that's the whole point of
+              streaming. A separate "fetching more..." bar below the table
+              (not this block) communicates that more may still be coming. */}
+          {results.length > 0 && (
             <div className="animate-fade-up">
               <FilterPanel results={results} onFilteredChange={setFiltered} />
 
               <p className="text-slate-500 text-sm mb-4">
                 Showing <span className="font-semibold text-slate-700">{filtered.length}</span> of{" "}
                 <span className="font-semibold text-slate-700">{results.length}</span> results
+                {loading && " (more coming...)"}
               </p>
 
               <div className="hidden md:block overflow-x-auto bg-white/90 backdrop-blur rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100">
@@ -207,7 +293,7 @@ function SearchPage() {
                     {filtered.map((biz, idx) => {
                       const hoursList = formatOpeningHours(biz.opening_hours);
                       return (
-                        <tr key={idx} className="border-b border-slate-50 align-top hover:bg-indigo-50/40 transition-colors">
+                        <tr key={biz.place_id || idx} className="border-b border-slate-50 align-top hover:bg-indigo-50/40 transition-colors animate-fade-up">
                           <td className="p-4 font-semibold text-slate-900">
                             <button
                               type="button"
@@ -264,6 +350,15 @@ function SearchPage() {
                     })}
                   </tbody>
                 </table>
+
+                {/* "More results loading" bar — lives inside the table card,
+                    right under the last row, until the "done" SSE event closes it out. */}
+                {loading && (
+                  <div className="flex items-center justify-center gap-2 border-t border-slate-100 py-4 text-sm text-slate-500">
+                    <Loader2 className="h-4 w-4 animate-spin text-indigo-500" />
+                    Fetching more businesses — {results.length} found so far...
+                  </div>
+                )}
               </div>
 
               <div className="md:hidden space-y-4">
@@ -271,12 +366,12 @@ function SearchPage() {
                   const hoursList = formatOpeningHours(biz.opening_hours);
                   return (
                     <div
-                      key={idx}
+                      key={biz.place_id || idx}
                       onClick={() => goToDetail(biz)}
                       role="button"
                       tabIndex={0}
                       onKeyDown={(e) => e.key === "Enter" && goToDetail(biz)}
-                      className="bg-white/90 backdrop-blur rounded-2xl shadow-lg shadow-slate-200/50 border border-slate-100 p-4 cursor-pointer hover:shadow-xl hover:border-indigo-200 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                      className="bg-white/90 backdrop-blur rounded-2xl shadow-lg shadow-slate-200/50 border border-slate-100 p-4 cursor-pointer hover:shadow-xl hover:border-indigo-200 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-400 animate-fade-up"
                     >
                       <p className="font-semibold text-slate-900 mb-1">{biz.name}</p>
                       <p className="text-sm text-slate-500 mb-2">{biz.category || "-"}</p>
@@ -327,9 +422,16 @@ function SearchPage() {
                     </div>
                   );
                 })}
+
+                {loading && (
+                  <div className="flex items-center justify-center gap-2 rounded-2xl bg-white/70 border border-slate-100 py-4 text-sm text-slate-500">
+                    <Loader2 className="h-4 w-4 animate-spin text-indigo-500" />
+                    Fetching more businesses — {results.length} found so far...
+                  </div>
+                )}
               </div>
 
-              {filtered.length === 0 && (
+              {!loading && filtered.length === 0 && (
                 <p className="text-slate-400 mt-6 text-center">No results match these filters.</p>
               )}
             </div>
