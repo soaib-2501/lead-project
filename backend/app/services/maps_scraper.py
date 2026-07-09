@@ -142,6 +142,11 @@ def get_images(detail_page, max_images: int = 6):
     real src on initial load, the rest carry a placeholder until scrolled
     into view. We nudge the page with a few small scroll/wait cycles first
     to force those thumbnails to swap in their real src before reading it.
+
+    We also check data-src/data-lazy-src as a fallback, since some lazy-load
+    implementations keep the real URL there until the src swap happens, and
+    we validate that whatever we capture actually looks like a complete
+    Google-hosted image URL rather than a lazy-load placeholder stub.
     """
     images = []
 
@@ -191,84 +196,11 @@ def build_query(city: str, area: str, category: str, keyword: str = None) -> str
     return " ".join(parts)
 
 
-def _scrape_one_business(browser, shared_user_agent: str, href: str) -> dict | None:
-    """
-    Scrapes a single business's Maps detail page AND its website intel
-    (social links + brand images), returning one complete, ready-to-yield
-    business dict — or None if the listing had no usable name.
+def scrape(query: str, max_results: int = 20) -> list[dict]:
+    """Runs one Google Maps text-search query and returns a list of business dicts."""
+    logger.info(f"[scrape] Launching browser for query: '{query}' (max_results={max_results})")
 
-    Website intel is fetched synchronously (one at a time) here rather than
-    batched concurrently across all businesses like before. That's the
-    deliberate tradeoff for streaming: each business becomes fully ready
-    and yieldable the moment its own scrape finishes, instead of waiting
-    for every business's website fetch to complete together at the end.
-    """
-    detail_page = browser.new_page(user_agent=shared_user_agent)
-    try:
-        detail_page.goto(href, timeout=30000, wait_until="domcontentloaded")
-        detail_page.wait_for_timeout(2500)
-
-        name = get_name(detail_page)
-        if not name:
-            return None
-
-        address = get_text(detail_page, "[data-item-id*='address']")
-        phone = get_text(detail_page, "[data-item-id*='phone']")
-        category = get_category(detail_page)
-        raw_rating, raw_reviews = get_rating_and_reviews(detail_page)
-        opening_hours = get_opening_hours(detail_page)
-        maps_images = get_images(detail_page)
-
-        try:
-            raw_website = detail_page.locator(
-                "[data-item-id*='authority']"
-            ).first.get_attribute("href", timeout=3000)
-            website = raw_website.strip() if raw_website else ""
-        except Exception:
-            website = ""
-
-        social_links = {}
-        website_images = {"og_image": None, "favicon": None, "logo": None, "gallery": []}
-        if website:
-            try:
-                intel = extract_site_intel(website)
-                social_links = intel["social_links"]
-                website_images = intel["images"]
-            except Exception as e:
-                logger.info(f"[scrape] Site intel extraction failed for {website}: {e}")
-
-        combined_images = list(maps_images)
-        for extra in [website_images["logo"], website_images["og_image"], *website_images["gallery"]]:
-            if extra and extra not in combined_images:
-                combined_images.append(extra)
-
-        return {
-            "place_id": href,
-            "name": name,
-            "category": category,
-            "address": address,
-            "phone": phone,
-            "website": website,
-            "rating": parse_rating(raw_rating),
-            "reviews": parse_reviews(raw_reviews),
-            "opening_hours": opening_hours,
-            "images": combined_images,
-            "favicon": website_images["favicon"],
-            "social_links": social_links,
-        }
-    finally:
-        detail_page.close()
-
-
-def scrape_stream(query: str, max_results: int = 20):
-    """
-    Same Google Maps search as scrape(), but a GENERATOR: yields each
-    business dict as soon as it's fully scraped, instead of returning one
-    big list at the end. This is what lets the frontend show results
-    progressively via Server-Sent Events instead of waiting for everything.
-    """
-    logger.info(f"[scrape_stream] Launching browser for query: '{query}' (max_results={max_results})")
-
+    data = []
     collected_hrefs = set()
 
     with sync_playwright() as p:
@@ -291,22 +223,22 @@ def scrape_stream(query: str, max_results: int = 20):
             "https://www.google.com/maps/search/" + query.replace(" ", "+"),
             timeout=60000,
         )
-        logger.info("[scrape_stream] Page loaded, waiting for content to settle...")
+        logger.info("[scrape] Page loaded, waiting for content to settle...")
         time.sleep(4)
 
         try:
             page.locator("button:has-text('Accept all')").first.click(timeout=4000)
-            logger.info("[scrape_stream] Dismissed cookie/consent dialog")
+            logger.info("[scrape] Dismissed cookie/consent dialog")
             time.sleep(1)
         except Exception:
-            logger.info("[scrape_stream] No consent dialog found (or already dismissed)")
+            logger.info("[scrape] No consent dialog found (or already dismissed)")
 
         try:
             page.wait_for_selector("div[role='feed']", timeout=15000)
         except Exception:
-            logger.warning("[scrape_stream] Results feed never appeared — yielding nothing")
+            logger.warning("[scrape] Results feed never appeared — returning empty list")
             browser.close()
-            return
+            return data
 
         feed = page.locator("div[role='feed']")
 
@@ -319,10 +251,10 @@ def scrape_stream(query: str, max_results: int = 20):
 
             cards = page.locator("a[href*='/maps/place']")
             current_count = cards.count()
-            logger.info(f"[scrape_stream] Scroll round {round_num + 1}: {current_count} cards loaded so far")
+            logger.info(f"[scrape] Scroll round {round_num + 1}: {current_count} cards loaded so far")
 
             if current_count >= max_results:
-                logger.info("[scrape_stream] Reached max_results during scroll, stopping")
+                logger.info("[scrape] Reached max_results during scroll, stopping")
                 break
             if current_count == previous_count:
                 stagnant_rounds += 1
@@ -331,7 +263,7 @@ def scrape_stream(query: str, max_results: int = 20):
             previous_count = current_count
 
             if stagnant_rounds >= 4:
-                logger.info("[scrape_stream] Feed stagnant for 4 rounds, stopping scroll")
+                logger.info("[scrape] Feed stagnant for 4 rounds, stopping scroll")
                 break
 
         cards = page.locator("a[href*='/maps/place']")
@@ -340,36 +272,85 @@ def scrape_stream(query: str, max_results: int = 20):
             if href:
                 collected_hrefs.add(href)
 
-        logger.info(f"[scrape_stream] Collected {len(collected_hrefs)} unique place links, visiting up to {max_results}")
+        logger.info(f"[scrape] Collected {len(collected_hrefs)} unique place links, visiting up to {max_results}")
 
         shared_user_agent = page.evaluate("navigator.userAgent")
-        yielded = 0
 
         for idx, href in enumerate(list(collected_hrefs)[:max_results], start=1):
             try:
-                biz = _scrape_one_business(browser, shared_user_agent, href)
-                if biz:
-                    yielded += 1
+                detail_page = browser.new_page(user_agent=shared_user_agent)
+                detail_page.goto(href, timeout=30000, wait_until="domcontentloaded")
+                detail_page.wait_for_timeout(2500)
+
+                name = get_name(detail_page)
+                address = get_text(detail_page, "[data-item-id*='address']")
+                phone = get_text(detail_page, "[data-item-id*='phone']")
+                category = get_category(detail_page)
+                raw_rating, raw_reviews = get_rating_and_reviews(detail_page)
+                opening_hours = get_opening_hours(detail_page)
+                maps_images = get_images(detail_page)
+
+                try:
+                    raw_website = detail_page.locator(
+                        "[data-item-id*='authority']"
+                    ).first.get_attribute("href", timeout=3000)
+                    website = raw_website.strip() if raw_website else ""
+                except Exception:
+                    website = ""
+
+                # Social links + brand images come from the business's own
+                # website, not Maps — a separate fetch that can fail
+                # independently (site down, no website, blocks bots). It
+                # must never take down the rest of the scrape, so it gets
+                # its own try/except here.
+                social_links = {}
+                website_images = {"og_image": None, "favicon": None, "logo": None, "gallery": []}
+                if website:
+                    try:
+                        intel = extract_site_intel(website)
+                        social_links = intel["social_links"]
+                        website_images = intel["images"]
+                    except Exception as e:
+                        logger.info(f"[scrape] Site intel extraction failed for {website}: {e}")
+
+                # Merge image sources: Maps listing photos first (usually
+                # higher quality, actual venue photos), then the website's
+                # own logo/og-image/gallery as a fallback/supplement —
+                # deduplicated while preserving order.
+                combined_images = list(maps_images)
+                for extra in [website_images["logo"], website_images["og_image"], *website_images["gallery"]]:
+                    if extra and extra not in combined_images:
+                        combined_images.append(extra)
+
+                if name:
+                    data.append({
+                        "place_id": href,
+                        "name": name,
+                        "category": category,
+                        "address": address,
+                        "phone": phone,
+                        "website": website,
+                        "rating": parse_rating(raw_rating),
+                        "reviews": parse_reviews(raw_reviews),
+                        "opening_hours": opening_hours,
+                        "images": combined_images,
+                        "favicon": website_images["favicon"],
+                        "social_links": social_links,
+                    })
                     logger.info(
-                        f"[scrape_stream] ({idx}/{min(len(collected_hrefs), max_results)}) "
-                        f"Yielding: {biz['name']} — {len(biz['images'])} images, "
-                        f"{len(biz['social_links'])} social links"
+                        f"[scrape] ({idx}/{min(len(collected_hrefs), max_results)}) Scraped: {name} "
+                        f"— {len(combined_images)} images, {len(social_links)} social links"
                     )
-                    yield biz
                 else:
-                    logger.warning(f"[scrape_stream] ({idx}) No name found, skipping: {href}")
+                    logger.warning(f"[scrape] ({idx}/{min(len(collected_hrefs), max_results)}) No name found, skipping: {href}")
+
+                detail_page.close()
+
             except Exception as e:
-                logger.warning(f"[scrape_stream] ({idx}) Failed to scrape {href}: {e}")
+                logger.warning(f"[scrape] ({idx}) Failed to scrape {href}: {e}")
                 continue
 
         browser.close()
 
-    logger.info(f"[scrape_stream] Done — {yielded} businesses yielded out of {len(collected_hrefs)} links visited")
-
-
-def scrape(query: str, max_results: int = 20) -> list[dict]:
-    """
-    Non-streaming wrapper kept for any caller that still needs the old
-    all-at-once behavior — just drains the generator into a list.
-    """
-    return list(scrape_stream(query=query, max_results=max_results))
+    logger.info(f"[scrape] Done — {len(data)} businesses collected out of {len(collected_hrefs)} links visited")
+    return data

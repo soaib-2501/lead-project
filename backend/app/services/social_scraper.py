@@ -9,19 +9,13 @@ plain HTTP page, not a Maps listing) with a different failure mode (site
 down, blocks bots, no website at all). Keeping it separate means a broken
 website never touches the Maps scraping logic.
 
-APPROACH: httpx + regex + light HTML parsing over the raw HTML. No
-JavaScript execution — just a scan of meta tags, JSON-LD, and every
-link/script tag for known patterns.
-
-CONCURRENCY: extract_site_intel_batch() fetches many websites at once using
-asyncio + httpx.AsyncClient, bounded by a semaphore. This is the fix for the
-biggest performance problem in the pipeline — doing these fetches one at a
-time inside the Maps scraping loop meant total time = sum of every site's
-fetch time (including slow 403s and timeouts). Fetching concurrently means
-total time ~= the single slowest fetch, since they all wait in parallel.
+APPROACH: httpx (fast, no browser) + regex + light HTML parsing over the raw
+HTML. Intentionally lightweight — no JavaScript execution, just a scan of
+meta tags, JSON-LD, and every link/script tag for known patterns. Sites that
+only render their footer/images via client-side JS won't be fully caught
+here; if that turns out to be common, swap this for a Playwright-based fetch.
 """
 
-import asyncio
 import logging
 import re
 from urllib.parse import urljoin, urlparse
@@ -30,6 +24,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# ---------- Social platform patterns ----------
+# Broadened beyond the original 5 — these are the platforms most commonly
+# linked from small/medium business website footers.
 SOCIAL_PATTERNS = {
     "facebook": re.compile(r"facebook\.com/[a-zA-Z0-9_.\-/]+", re.I),
     "instagram": re.compile(r"instagram\.com/[a-zA-Z0-9_.\-/]+", re.I),
@@ -44,6 +41,9 @@ SOCIAL_PATTERNS = {
     "github": re.compile(r"github\.com/[a-zA-Z0-9_.\-]+", re.I),
 }
 
+# Paths that show up inside every social domain's own share/login widgets —
+# matching these would misidentify a "share on Facebook" button as the
+# business's own Facebook page, so they're excluded.
 NOISE_PATTERNS = ("sharer", "share.php", "intent/tweet", "login", "dialog", "/plugins/")
 
 HEADERS = {
@@ -55,14 +55,13 @@ HEADERS = {
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".svg", ".gif")
 
-EMPTY_INTEL = {"social_links": {}, "images": {"og_image": None, "favicon": None, "logo": None, "gallery": []}}
-
 
 def _clean_url(raw: str) -> str:
     return raw.rstrip("/\"'")
 
 
 def _make_absolute(base_url: str, maybe_relative: str) -> str:
+    """Turns '/img/logo.png' into 'https://example.com/img/logo.png'."""
     try:
         return urljoin(base_url, maybe_relative)
     except Exception:
@@ -70,8 +69,10 @@ def _make_absolute(base_url: str, maybe_relative: str) -> str:
 
 
 def _extract_social_links(html: str) -> dict:
+    """Two-pass social link extraction: JSON-LD sameAs, then raw HTML scan."""
     links = {}
 
+    # Pass 1: JSON-LD "sameAs" — most reliable when present, often used for SEO.
     for ld_match in re.finditer(r'"sameAs"\s*:\s*\[(.*?)\]', html, re.S):
         block = ld_match.group(1)
         for platform, pattern in SOCIAL_PATTERNS.items():
@@ -81,6 +82,7 @@ def _extract_social_links(html: str) -> dict:
             if match:
                 links[platform] = "https://" + _clean_url(match.group(0))
 
+    # Pass 2: general HTML scan for anything JSON-LD missed.
     for platform, pattern in SOCIAL_PATTERNS.items():
         if platform in links:
             continue
@@ -95,8 +97,17 @@ def _extract_social_links(html: str) -> dict:
 
 
 def _extract_images(html: str, base_url: str) -> dict:
+    """
+    Pulls brand-relevant images in priority order:
+    - og:image / twitter:image (social share preview, usually the logo/hero)
+    - <link rel="icon"> favicon
+    - JSON-LD "logo" / "image" fields
+    - a handful of <img> tags likely to be the logo (alt/src containing 'logo')
+    - fallback: first few generic <img> tags on the page (gallery/product shots)
+    """
     images = {"og_image": None, "favicon": None, "logo": None, "gallery": []}
 
+    # og:image / twitter:image
     og_match = re.search(
         r'<meta[^>]+(?:property|name)=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
         html, re.I,
@@ -109,6 +120,7 @@ def _extract_images(html: str, base_url: str) -> dict:
     if og_match:
         images["og_image"] = _make_absolute(base_url, og_match.group(1))
 
+    # favicon
     fav_match = re.search(
         r'<link[^>]+rel=["\'](?:shortcut )?icon["\'][^>]+href=["\']([^"\']+)["\']',
         html, re.I,
@@ -116,12 +128,15 @@ def _extract_images(html: str, base_url: str) -> dict:
     if fav_match:
         images["favicon"] = _make_absolute(base_url, fav_match.group(1))
     else:
+        # sensible default most browsers/servers honor
         images["favicon"] = _make_absolute(base_url, "/favicon.ico")
 
+    # JSON-LD logo/image
     logo_match = re.search(r'"logo"\s*:\s*"([^"]+)"', html)
     if logo_match:
         images["logo"] = _make_absolute(base_url, logo_match.group(1))
 
+    # <img> tags whose src/alt hints at being the logo
     for img_match in re.finditer(r'<img[^>]+>', html, re.I):
         tag = img_match.group(0)
         src_match = re.search(r'src=["\']([^"\']+)["\']', tag, re.I)
@@ -134,6 +149,8 @@ def _extract_images(html: str, base_url: str) -> dict:
             images["logo"] = _make_absolute(base_url, src)
             break
 
+    # Fallback gallery — first handful of real image files on the page,
+    # skipping obvious icons/tracking pixels by size hints in the filename.
     seen = set()
     for img_match in re.finditer(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.I):
         src = img_match.group(1)
@@ -152,70 +169,60 @@ def _extract_images(html: str, base_url: str) -> dict:
     return images
 
 
-async def _fetch_one_async(client: httpx.AsyncClient, semaphore: asyncio.Semaphore,
-                            website_url: str, timeout: float) -> dict:
-    """Fetches and parses a single website, bounded by the shared semaphore."""
-    parsed = urlparse(website_url)
-    normalized = website_url if parsed.scheme else "https://" + website_url
+def extract_social_links(website_url: str, timeout: float = 8.0) -> dict:
+    """Backward-compatible wrapper — social links only (used by existing callers)."""
+    result = extract_site_intel(website_url, timeout=timeout)
+    return result.get("social_links", {})
 
-    async with semaphore:
-        try:
-            response = await client.get(normalized, timeout=timeout, follow_redirects=True)
+
+def extract_site_intel(website_url: str, timeout: float = 8.0) -> dict:
+    """
+    Fetches a business's homepage and returns social profile URLs + brand
+    images in one pass (a single fetch is reused for both, since they both
+    need the same HTML).
+
+    Returns:
+        {
+            "social_links": {"facebook": "https://...", "instagram": "..."},
+            "images": {
+                "og_image": "https://...",
+                "favicon": "https://...",
+                "logo": "https://...",
+                "gallery": ["https://...", ...]
+            }
+        }
+
+    Returns empty structures on any failure — a missing/broken website
+    should never crash a whole search batch.
+    """
+    empty = {"social_links": {}, "images": {"og_image": None, "favicon": None, "logo": None, "gallery": []}}
+
+    if not website_url:
+        return empty
+
+    parsed = urlparse(website_url)
+    if not parsed.scheme:
+        website_url = "https://" + website_url
+
+    try:
+        with httpx.Client(headers=HEADERS, timeout=timeout, follow_redirects=True) as client:
+            response = client.get(website_url)
             response.raise_for_status()
             html = response.text
-            final_url = str(response.url)
-        except Exception as e:
-            logger.warning(f"[social_scraper] Could not fetch {website_url}: {e}")
-            return dict(EMPTY_INTEL)
+            final_url = str(response.url)  # after redirects, for correct relative-URL resolution
+    except Exception as e:
+        logger.warning(f"[social_scraper] Could not fetch {website_url}: {e}")
+        return empty
 
     social_links = _extract_social_links(html)
     images = _extract_images(html, final_url)
 
-    if social_links:
-        logger.info(f"[social_scraper] Found {len(social_links)} social links for {website_url}: {list(social_links.keys())}")
-    else:
+    if not social_links:
         logger.info(f"[social_scraper] No social links found for {website_url}")
+    else:
+        logger.info(f"[social_scraper] Found {len(social_links)} social links for {website_url}: {list(social_links.keys())}")
+
+    image_count = sum(1 for k in ("og_image", "favicon", "logo") if images[k]) + len(images["gallery"])
+    logger.info(f"[social_scraper] Found {image_count} image(s) for {website_url}")
 
     return {"social_links": social_links, "images": images}
-
-
-async def extract_site_intel_batch(website_urls: list[str], max_concurrent: int = 8,
-                                    timeout: float = 8.0) -> dict:
-    """
-    Fetches site intel (social links + images) for many websites concurrently.
-
-    Bounded by max_concurrent so we don't open dozens of simultaneous
-    connections at once (polite to target servers, and avoids the local
-    machine running out of sockets on a big search). Returns a dict keyed
-    by the ORIGINAL url string passed in, so callers can match results back
-    to businesses without worrying about redirect changes.
-    """
-    if not website_urls:
-        return {}
-
-    semaphore = asyncio.Semaphore(max_concurrent)
-    results = {}
-
-    async with httpx.AsyncClient(headers=HEADERS) as client:
-        tasks = {url: asyncio.create_task(_fetch_one_async(client, semaphore, url, timeout))
-                 for url in website_urls}
-        for url, task in tasks.items():
-            try:
-                results[url] = await task
-            except Exception as e:
-                logger.warning(f"[social_scraper] Task failed for {url}: {e}")
-                results[url] = dict(EMPTY_INTEL)
-
-    return results
-
-
-def extract_social_links(website_url: str, timeout: float = 8.0) -> dict:
-    """Sync single-site helper, kept for any other callers that need one-off lookups."""
-    result = asyncio.run(extract_site_intel_batch([website_url], max_concurrent=1, timeout=timeout))
-    return result.get(website_url, dict(EMPTY_INTEL))["social_links"]
-
-
-def extract_site_intel(website_url: str, timeout: float = 8.0) -> dict:
-    """Sync single-site helper, kept for any other callers that need one-off lookups."""
-    result = asyncio.run(extract_site_intel_batch([website_url], max_concurrent=1, timeout=timeout))
-    return result.get(website_url, dict(EMPTY_INTEL))
