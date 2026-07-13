@@ -18,6 +18,7 @@ class BusinessOut(BaseModel):
     address: Optional[str] = None
     phone: Optional[str] = None
     website: Optional[str] = None
+    email: Optional[str] = None
     rating: Optional[float] = None
     reviews: int = 0
     opening_hours: Optional[str] = None

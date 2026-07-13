@@ -298,18 +298,20 @@ def scrape(query: str, max_results: int = 20) -> list[dict]:
                 except Exception:
                     website = ""
 
-                # Social links + brand images come from the business's own
-                # website, not Maps — a separate fetch that can fail
-                # independently (site down, no website, blocks bots). It
-                # must never take down the rest of the scrape, so it gets
-                # its own try/except here.
+                # Social links + brand images + contact email come from the
+                # business's own website, not Maps — a separate fetch that
+                # can fail independently (site down, no website, blocks
+                # bots). It must never take down the rest of the scrape,
+                # so it gets its own try/except here.
                 social_links = {}
                 website_images = {"og_image": None, "favicon": None, "logo": None, "gallery": []}
+                email = None
                 if website:
                     try:
                         intel = extract_site_intel(website)
                         social_links = intel["social_links"]
                         website_images = intel["images"]
+                        email = intel.get("email")
                     except Exception as e:
                         logger.info(f"[scrape] Site intel extraction failed for {website}: {e}")
 
@@ -330,6 +332,7 @@ def scrape(query: str, max_results: int = 20) -> list[dict]:
                         "address": address,
                         "phone": phone,
                         "website": website,
+                        "email": email,
                         "rating": parse_rating(raw_rating),
                         "reviews": parse_reviews(raw_reviews),
                         "opening_hours": opening_hours,
@@ -339,7 +342,8 @@ def scrape(query: str, max_results: int = 20) -> list[dict]:
                     })
                     logger.info(
                         f"[scrape] ({idx}/{min(len(collected_hrefs), max_results)}) Scraped: {name} "
-                        f"— {len(combined_images)} images, {len(social_links)} social links"
+                        f"— {len(combined_images)} images, {len(social_links)} social links, "
+                        f"email={'yes' if email else 'no'}"
                     )
                 else:
                     logger.warning(f"[scrape] ({idx}/{min(len(collected_hrefs), max_results)}) No name found, skipping: {href}")

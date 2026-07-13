@@ -4,6 +4,7 @@ import {
   ArrowRight,
   MapPin,
   Phone,
+  Mail,
   Globe,
   Star,
   Clock,
@@ -143,7 +144,23 @@ function BusinessDetailPage() {
               )}
             </div>
 
-            <div className="bg-white/90 backdrop-blur rounded-2xl shadow-md shadow-slate-200/50 border border-slate-100 p-5 sm:col-span-2">
+            <div className="bg-white/90 backdrop-blur rounded-2xl shadow-md shadow-slate-200/50 border border-slate-100 p-5">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50">
+                  <Mail className="h-4 w-4 text-indigo-600" />
+                </span>
+                <span className="text-sm font-semibold text-slate-800">Email</span>
+              </div>
+              {biz.email ? (
+                <a href={`mailto:${biz.email}`} className="text-sm text-indigo-600 hover:underline break-all">
+                  {biz.email}
+                </a>
+              ) : (
+                <p className="text-sm text-slate-400">Not available</p>
+              )}
+            </div>
+
+            <div className="bg-white/90 backdrop-blur rounded-2xl shadow-md shadow-slate-200/50 border border-slate-100 p-5">
               <div className="flex items-center gap-2 mb-2">
                 <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50">
                   <Globe className="h-4 w-4 text-indigo-600" />

@@ -3,7 +3,56 @@ import { useNavigate } from "react-router-dom";
 import api from "../services/api";
 import FilterPanel from "../components/FilterPanel";
 import { useSearchContext } from "../context/SearchContext";
-import { Search, MapPin, LayoutGrid, Sparkles, Star, Phone, Globe, Clock } from "lucide-react";
+import { Search, MapPin, LayoutGrid, Sparkles, Star, Phone, Mail, Globe, Clock, Download } from "lucide-react";
+
+// Converts an array of business objects into a CSV file and triggers a
+// browser download. Kept local to this page since it's the only place
+// export is triggered from — no need for a separate service file for one
+// small pure function.
+function exportToCsv(businesses) {
+  if (!businesses || businesses.length === 0) return;
+
+  const columns = [
+    { key: "name", label: "Name" },
+    { key: "category", label: "Category" },
+    { key: "address", label: "Address" },
+    { key: "phone", label: "Phone" },
+    { key: "email", label: "Email" },
+    { key: "website", label: "Website" },
+    { key: "rating", label: "Rating" },
+    { key: "reviews", label: "Reviews" },
+    { key: "opening_hours", label: "Opening Hours" },
+  ];
+
+  // Escapes a single CSV field: wraps in quotes and doubles any internal
+  // quotes, per standard CSV escaping. Anything with a comma, quote, or
+  // newline needs quoting; simplest to just always quote every field.
+  const escapeCell = (value) => {
+    const str = value === null || value === undefined ? "" : String(value);
+    return `"${str.replace(/"/g, '""')}"`;
+  };
+
+  const headerRow = columns.map((col) => escapeCell(col.label)).join(",");
+  const dataRows = businesses.map((biz) =>
+    columns.map((col) => escapeCell(biz[col.key])).join(",")
+  );
+
+  const csvContent = [headerRow, ...dataRows].join("\r\n");
+
+  // Prefix with a UTF-8 BOM so Excel opens the file with correct encoding
+  // instead of mangling non-ASCII characters in names/addresses.
+  const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement("a");
+  link.href = url;
+  const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  link.download = `lead-search-results-${timestamp}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
 
 function SearchPage() {
   const navigate = useNavigate();
@@ -184,10 +233,21 @@ function SearchPage() {
             <div className="animate-fade-up">
               <FilterPanel results={results} onFilteredChange={setFiltered} />
 
-              <p className="text-slate-500 text-sm mb-4">
-                Showing <span className="font-semibold text-slate-700">{filtered.length}</span> of{" "}
-                <span className="font-semibold text-slate-700">{results.length}</span> results
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <p className="text-slate-500 text-sm">
+                  Showing <span className="font-semibold text-slate-700">{filtered.length}</span> of{" "}
+                  <span className="font-semibold text-slate-700">{results.length}</span> results
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() => exportToCsv(filtered)}
+                  disabled={filtered.length === 0}
+                  className="inline-flex items-center gap-2 rounded-xl bg-white border border-slate-200 shadow-sm px-4 py-2.5 text-sm font-medium text-slate-700 hover:border-indigo-300 hover:text-indigo-600 hover:shadow-md disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                >
+                  <Download className="h-4 w-4" /> Export CSV
+                </button>
+              </div>
 
               <div className="hidden md:block overflow-x-auto bg-white/90 backdrop-blur rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100">
                 <table className="w-full text-sm">
@@ -197,6 +257,7 @@ function SearchPage() {
                       <th className="p-4 font-semibold">Category</th>
                       <th className="p-4 font-semibold">Address</th>
                       <th className="p-4 font-semibold">Phone</th>
+                      <th className="p-4 font-semibold">Email</th>
                       <th className="p-4 font-semibold">Website</th>
                       <th className="p-4 font-semibold text-center">Rating</th>
                       <th className="p-4 font-semibold text-center">Reviews</th>
@@ -220,6 +281,19 @@ function SearchPage() {
                           <td className="p-4 text-slate-600">{biz.category || "-"}</td>
                           <td className="p-4 text-slate-600 max-w-xs">{biz.address || "-"}</td>
                           <td className="p-4 text-slate-600 whitespace-nowrap">{biz.phone || "-"}</td>
+                          <td className="p-4">
+                            {biz.email ? (
+                              <a
+                                href={`mailto:${biz.email}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium break-all"
+                              >
+                                <Mail className="h-3.5 w-3.5 shrink-0" /> {biz.email}
+                              </a>
+                            ) : (
+                              "-"
+                            )}
+                          </td>
                           <td className="p-4">
                             {biz.website ? (
                               <a
@@ -290,6 +364,12 @@ function SearchPage() {
                           <Phone className="h-4 w-4 shrink-0 text-slate-400" />
                           <span>{biz.phone || "-"}</span>
                         </p>
+                        {biz.email && (
+                          <p className="text-sm text-slate-600 flex items-center gap-2">
+                            <Mail className="h-4 w-4 shrink-0 text-slate-400" />
+                            <span className="break-all">{biz.email}</span>
+                          </p>
+                        )}
                       </div>
 
                       <div className="flex flex-wrap items-center gap-3 text-sm mb-2">

@@ -1,19 +1,21 @@
 """
-Social media links + brand images extraction from a business's own website.
+Social media links + brand images + contact email extraction from a
+business's own website.
 
 WHY THIS IS A SEPARATE MODULE FROM maps_scraper.py:
-Google Maps almost never lists a business's social media accounts or brand
-imagery directly — the reliable source is the business's own website
-(footer/header links, meta tags), which is a completely different fetch (a
-plain HTTP page, not a Maps listing) with a different failure mode (site
-down, blocks bots, no website at all). Keeping it separate means a broken
-website never touches the Maps scraping logic.
+Google Maps almost never lists a business's social media accounts, email,
+or brand imagery directly — the reliable source is the business's own
+website (footer/header links, meta tags, mailto: links), which is a
+completely different fetch (a plain HTTP page, not a Maps listing) with a
+different failure mode (site down, blocks bots, no website at all). Keeping
+it separate means a broken website never touches the Maps scraping logic.
 
 APPROACH: httpx (fast, no browser) + regex + light HTML parsing over the raw
 HTML. Intentionally lightweight — no JavaScript execution, just a scan of
-meta tags, JSON-LD, and every link/script tag for known patterns. Sites that
-only render their footer/images via client-side JS won't be fully caught
-here; if that turns out to be common, swap this for a Playwright-based fetch.
+meta tags, JSON-LD, mailto: links, and every link/script tag for known
+patterns. Sites that only render their footer/contact info via client-side
+JS won't be fully caught here; if that turns out to be common, swap this
+for a Playwright-based fetch.
 """
 
 import logging
@@ -25,8 +27,6 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # ---------- Social platform patterns ----------
-# Broadened beyond the original 5 — these are the platforms most commonly
-# linked from small/medium business website footers.
 SOCIAL_PATTERNS = {
     "facebook": re.compile(r"facebook\.com/[a-zA-Z0-9_.\-/]+", re.I),
     "instagram": re.compile(r"instagram\.com/[a-zA-Z0-9_.\-/]+", re.I),
@@ -41,10 +41,26 @@ SOCIAL_PATTERNS = {
     "github": re.compile(r"github\.com/[a-zA-Z0-9_.\-]+", re.I),
 }
 
-# Paths that show up inside every social domain's own share/login widgets —
-# matching these would misidentify a "share on Facebook" button as the
-# business's own Facebook page, so they're excluded.
 NOISE_PATTERNS = ("sharer", "share.php", "intent/tweet", "login", "dialog", "/plugins/")
+
+# ---------- Email patterns ----------
+MAILTO_PATTERN = re.compile(r'mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})', re.I)
+PLAIN_EMAIL_PATTERN = re.compile(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}')
+
+# Domains/patterns that show up in emails but are never a business's real
+# contact address — tracking pixels, template placeholders, image
+# filenames that happen to match the email regex, third-party widgets, etc.
+EMAIL_NOISE_DOMAINS = (
+    "example.com", "sentry.io", "wixpress.com", "godaddy.com",
+    "schema.org", "w3.org", "gstatic.com", "googleapis.com",
+    "cloudflare.com", "your-email.com", "yourdomain.com", "domain.com",
+)
+EMAIL_NOISE_LOCAL_PARTS = ("noreply", "no-reply", "donotreply", "test", "example", "placeholder")
+# Regex artifacts: an email-shaped match that's actually a filename
+# (logo@2x.png would never match since it needs a valid TLD after the dot,
+# but sprite@1x.svg-style false positives from CSS/JS blobs are still
+# filtered by requiring the string not end in a common non-TLD extension).
+EMAIL_INVALID_TLD_SUFFIXES = (".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp", ".css", ".js")
 
 HEADERS = {
     "User-Agent": (
@@ -68,11 +84,49 @@ def _make_absolute(base_url: str, maybe_relative: str) -> str:
         return maybe_relative
 
 
+def _is_valid_email(email: str) -> bool:
+    email_lower = email.lower()
+
+    if email_lower.endswith(EMAIL_INVALID_TLD_SUFFIXES):
+        return False
+
+    domain = email_lower.split("@")[-1]
+    if any(noise in domain for noise in EMAIL_NOISE_DOMAINS):
+        return False
+
+    local_part = email_lower.split("@")[0]
+    if any(noise in local_part for noise in EMAIL_NOISE_LOCAL_PARTS):
+        return False
+
+    return True
+
+
+def _extract_email(html: str) -> str | None:
+    """
+    Two-pass email extraction:
+    1. mailto: links — highest confidence, these are explicit contact links
+       the site owner put there on purpose.
+    2. Plain-text email pattern anywhere in the HTML — a fallback for sites
+       that show an email as text without a mailto: link.
+    Returns the first valid match, or None if nothing usable was found.
+    """
+    for match in MAILTO_PATTERN.finditer(html):
+        candidate = match.group(1)
+        if _is_valid_email(candidate):
+            return candidate
+
+    for match in PLAIN_EMAIL_PATTERN.finditer(html):
+        candidate = match.group(0)
+        if _is_valid_email(candidate):
+            return candidate
+
+    return None
+
+
 def _extract_social_links(html: str) -> dict:
     """Two-pass social link extraction: JSON-LD sameAs, then raw HTML scan."""
     links = {}
 
-    # Pass 1: JSON-LD "sameAs" — most reliable when present, often used for SEO.
     for ld_match in re.finditer(r'"sameAs"\s*:\s*\[(.*?)\]', html, re.S):
         block = ld_match.group(1)
         for platform, pattern in SOCIAL_PATTERNS.items():
@@ -82,7 +136,6 @@ def _extract_social_links(html: str) -> dict:
             if match:
                 links[platform] = "https://" + _clean_url(match.group(0))
 
-    # Pass 2: general HTML scan for anything JSON-LD missed.
     for platform, pattern in SOCIAL_PATTERNS.items():
         if platform in links:
             continue
@@ -107,7 +160,6 @@ def _extract_images(html: str, base_url: str) -> dict:
     """
     images = {"og_image": None, "favicon": None, "logo": None, "gallery": []}
 
-    # og:image / twitter:image
     og_match = re.search(
         r'<meta[^>]+(?:property|name)=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
         html, re.I,
@@ -120,7 +172,6 @@ def _extract_images(html: str, base_url: str) -> dict:
     if og_match:
         images["og_image"] = _make_absolute(base_url, og_match.group(1))
 
-    # favicon
     fav_match = re.search(
         r'<link[^>]+rel=["\'](?:shortcut )?icon["\'][^>]+href=["\']([^"\']+)["\']',
         html, re.I,
@@ -128,15 +179,12 @@ def _extract_images(html: str, base_url: str) -> dict:
     if fav_match:
         images["favicon"] = _make_absolute(base_url, fav_match.group(1))
     else:
-        # sensible default most browsers/servers honor
         images["favicon"] = _make_absolute(base_url, "/favicon.ico")
 
-    # JSON-LD logo/image
     logo_match = re.search(r'"logo"\s*:\s*"([^"]+)"', html)
     if logo_match:
         images["logo"] = _make_absolute(base_url, logo_match.group(1))
 
-    # <img> tags whose src/alt hints at being the logo
     for img_match in re.finditer(r'<img[^>]+>', html, re.I):
         tag = img_match.group(0)
         src_match = re.search(r'src=["\']([^"\']+)["\']', tag, re.I)
@@ -149,8 +197,6 @@ def _extract_images(html: str, base_url: str) -> dict:
             images["logo"] = _make_absolute(base_url, src)
             break
 
-    # Fallback gallery — first handful of real image files on the page,
-    # skipping obvious icons/tracking pixels by size hints in the filename.
     seen = set()
     for img_match in re.finditer(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.I):
         src = img_match.group(1)
@@ -177,9 +223,9 @@ def extract_social_links(website_url: str, timeout: float = 8.0) -> dict:
 
 def extract_site_intel(website_url: str, timeout: float = 8.0) -> dict:
     """
-    Fetches a business's homepage and returns social profile URLs + brand
-    images in one pass (a single fetch is reused for both, since they both
-    need the same HTML).
+    Fetches a business's homepage and returns social profile URLs, brand
+    images, and a contact email in one pass (a single fetch is reused for
+    all three, since they all need the same HTML).
 
     Returns:
         {
@@ -189,13 +235,18 @@ def extract_site_intel(website_url: str, timeout: float = 8.0) -> dict:
                 "favicon": "https://...",
                 "logo": "https://...",
                 "gallery": ["https://...", ...]
-            }
+            },
+            "email": "contact@business.com" | None
         }
 
     Returns empty structures on any failure — a missing/broken website
     should never crash a whole search batch.
     """
-    empty = {"social_links": {}, "images": {"og_image": None, "favicon": None, "logo": None, "gallery": []}}
+    empty = {
+        "social_links": {},
+        "images": {"og_image": None, "favicon": None, "logo": None, "gallery": []},
+        "email": None,
+    }
 
     if not website_url:
         return empty
@@ -209,13 +260,26 @@ def extract_site_intel(website_url: str, timeout: float = 8.0) -> dict:
             response = client.get(website_url)
             response.raise_for_status()
             html = response.text
-            final_url = str(response.url)  # after redirects, for correct relative-URL resolution
+            final_url = str(response.url)
     except Exception as e:
         logger.warning(f"[social_scraper] Could not fetch {website_url}: {e}")
         return empty
 
     social_links = _extract_social_links(html)
     images = _extract_images(html, final_url)
+    email = _extract_email(html)
+
+    # A contact/about page often has the email even when the homepage
+    # doesn't — try one common path as a cheap second attempt.
+    if not email:
+        try:
+            contact_url = urljoin(final_url, "/contact")
+            with httpx.Client(headers=HEADERS, timeout=timeout, follow_redirects=True) as client:
+                contact_response = client.get(contact_url)
+                if contact_response.status_code == 200:
+                    email = _extract_email(contact_response.text)
+        except Exception:
+            pass
 
     if not social_links:
         logger.info(f"[social_scraper] No social links found for {website_url}")
@@ -225,4 +289,9 @@ def extract_site_intel(website_url: str, timeout: float = 8.0) -> dict:
     image_count = sum(1 for k in ("og_image", "favicon", "logo") if images[k]) + len(images["gallery"])
     logger.info(f"[social_scraper] Found {image_count} image(s) for {website_url}")
 
-    return {"social_links": social_links, "images": images}
+    if email:
+        logger.info(f"[social_scraper] Found email for {website_url}: {email}")
+    else:
+        logger.info(f"[social_scraper] No email found for {website_url}")
+
+    return {"social_links": social_links, "images": images, "email": email}
