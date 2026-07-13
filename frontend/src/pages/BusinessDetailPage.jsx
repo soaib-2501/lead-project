@@ -11,6 +11,7 @@ import {
   Tag,
   MessageSquareText,
   ImageOff,
+  Search,
 } from "lucide-react";
 import { useSearchContext } from "../context/SearchContext";
 
@@ -38,10 +39,34 @@ function BusinessDetailPage() {
   const prevBiz = currentIndex > 0 ? filtered[currentIndex - 1] : null;
   const nextBiz = currentIndex >= 0 && currentIndex < filtered.length - 1 ? filtered[currentIndex + 1] : null;
 
+  // Goes back to wherever the user actually came from (search page, or
+  // back from an OSINT flow that was opened from here). Falls back to
+  // the search page only if this page was opened directly (no history
+  // entry in this app, e.g. refresh or a bookmarked/shared link).
+  const handleBack = () => {
+    if (location.key !== "default") {
+      navigate(-1);
+    } else {
+      navigate("/");
+    }
+  };
+
   const goTo = (target) => {
     if (!target) return;
     const targetSlug = encodeURIComponent(target.name.toLowerCase().replace(/\s+/g, "-"));
     navigate(`/business/${targetSlug}`, { state: { business: target } });
+  };
+
+  const goToOsint = () => {
+    navigate("/osint", {
+      state: {
+        prefill: {
+          business_name: biz.name,
+          location: biz.address || "",
+          address: biz.address || "",
+        },
+      },
+    });
   };
 
   if (!biz) {
@@ -79,10 +104,10 @@ function BusinessDetailPage() {
         <div className="mx-auto max-w-3xl">
           <div className="flex items-center justify-between mb-6">
             <button
-              onClick={() => navigate("/")}
+              onClick={handleBack}
               className="inline-flex items-center gap-2 text-slate-500 hover:text-indigo-600 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400 rounded"
             >
-              <ArrowLeft className="h-4 w-4" /> Back to results
+              <ArrowLeft className="h-4 w-4" /> Back
             </button>
 
             {filtered.length > 0 && currentIndex >= 0 && (
@@ -114,6 +139,13 @@ function BusinessDetailPage() {
                   </span>
                 </div>
               )}
+
+              <button
+                onClick={goToOsint}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-medium text-sm px-4 py-2.5 transition-colors"
+              >
+                <Search className="h-4 w-4" /> Search on OSINT
+              </button>
             </div>
           </div>
 
