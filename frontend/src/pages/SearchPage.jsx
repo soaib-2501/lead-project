@@ -286,7 +286,7 @@ function SearchPage() {
                               <a
                                 href={`mailto:${biz.email}`}
                                 onClick={(e) => e.stopPropagation()}
-                                className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium break-all"
+                                className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium break-words"
                               >
                                 <Mail className="h-3.5 w-3.5 shrink-0" /> {biz.email}
                               </a>
@@ -367,7 +367,7 @@ function SearchPage() {
                         {biz.email && (
                           <p className="text-sm text-slate-600 flex items-center gap-2">
                             <Mail className="h-4 w-4 shrink-0 text-slate-400" />
-                            <span className="break-all">{biz.email}</span>
+                            <span className="break-words">{biz.email}</span>
                           </p>
                         )}
                       </div>
