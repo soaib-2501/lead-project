@@ -39,7 +39,29 @@ NON_BUSINESS_DOMAINS = {
     "rocketreach.co", "beststartup.in", "lawctopus.com", "signalhire.com",
     "quora.com", "reddit.com", "pinterest.com", "wypages.com",
     "punelist.com", "nativeplanet.com", "nobroker.in", "startupindiamagazine.com",
+    # Education boards / govt portals — these show up as high-ranking
+    # "keyword matches" for coaching centers (e.g. any business with
+    # "NIOS"/"CBSE" in its name) but are never the business's own site.
+    "nios.ac.in", "cbse.gov.in", "cbse.nic.in", "cisce.org",
+    "ncert.nic.in", "ncert.gov.in", "aicte-india.org", "ugc.ac.in",
+    "digilocker.gov.in",
+    # Job/recruitment listing sites — these rank highly for hospital/
+    # company names because they scrape and republish job postings, but
+    # are never the business's own site.
+    "allgovernmentjobs.in", "sarkariresult.com", "freejobalert.com",
+    "employmentnews.gov.in", "indgovtjobs.in", "governmentjobs.com",
 }
+
+# Any domain ending in one of these is almost certainly a government or
+# educational-institution portal, not an individual business's own site —
+# checked as a suffix so we don't need to enumerate every board/state site.
+# NOTE: this is only ever applied to FALLBACK candidates (see engine.py) —
+# never to keyword-matched candidates, since a real government hospital's
+# or college's own official site legitimately lives on a .gov.in/.ac.in
+# domain and must not be excluded just for matching that suffix.
+NON_BUSINESS_DOMAIN_SUFFIXES = (
+    ".gov.in", ".nic.in", ".ac.in", ".edu.in", ".gov", ".edu",
+)
 
 BUSINESS_TYPE_KEYWORDS = {
     "Cafe": ["cafe", "café", "coffee"],
@@ -108,7 +130,11 @@ def is_review_site(domain: str):
 
 
 def is_probably_not_business_site(domain: str) -> bool:
-    return any(_domain_matches(domain, d) for d in NON_BUSINESS_DOMAINS)
+    if any(_domain_matches(domain, d) for d in NON_BUSINESS_DOMAINS):
+        return True
+    if any(domain.endswith(suffix) for suffix in NON_BUSINESS_DOMAIN_SUFFIXES):
+        return True
+    return False
 
 
 def extract_sector_number(text: str):
