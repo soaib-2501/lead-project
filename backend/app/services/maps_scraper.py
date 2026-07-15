@@ -5,6 +5,7 @@ import time
 from playwright.sync_api import sync_playwright
 
 from app.services.social_scraper import extract_site_intel
+from app.services.ddg_fallback_scraper import get_ddg_fallback_intel
 
 logger = logging.getLogger(__name__)
 
@@ -51,18 +52,61 @@ def get_name(detail_page):
     return ""
 
 
+def parse_review_count_text(text: str) -> str:
+    """
+    Google Maps shows review counts in several different formats depending
+    on place type/locale — colleges and institutions in particular often
+    drop the "(1,234)" parenthetical style used by restaurants/shops.
+    Tries several patterns in order of specificity.
+    """
+    if not text:
+        return ""
+
+    # "(1,234)" — the common restaurant/shop style
+    match = re.search(r"\(([\d,]+)\)", text)
+    if match:
+        return match.group(1).replace(",", "")
+
+    # "1.2K reviews" / "1.2K Reviews"
+    k_match = re.search(r"([\d.]+)\s*K\b", text, re.I)
+    if k_match:
+        try:
+            return str(int(float(k_match.group(1)) * 1000))
+        except ValueError:
+            pass
+
+    # "1,234 reviews" / "1234 Reviews" / "1,234 Google reviews" — no parens
+    plain_match = re.search(r"([\d,]{2,})\s*(?:google\s+)?reviews?\b", text, re.I)
+    if plain_match:
+        return plain_match.group(1).replace(",", "")
+
+    return ""
+
+
 def get_rating_and_reviews(detail_page):
     rating = ""
     review_count = ""
     try:
-        block_text = detail_page.locator("div.F7nice").first.inner_text(timeout=3000)
-        rating_match = re.search(r"(\d+[.,]\d+)", block_text)
+        block = detail_page.locator("div.F7nice").first
+        block_text = block.inner_text(timeout=3000)
+
+        # aria-label often carries the full "4.5 stars 1,234 Reviews" text
+        # even when the visible text is split oddly across child spans —
+        # a second, usually more complete, source that survives Google's
+        # DOM class-name churn better than scraping visible text alone.
+        aria_text = ""
+        try:
+            aria_text = block.get_attribute("aria-label", timeout=1500) or ""
+        except Exception:
+            pass
+
+        combined_text = f"{block_text} {aria_text}"
+
+        rating_match = re.search(r"(\d+[.,]\d+)", combined_text)
         if rating_match:
             rating = rating_match.group(1).replace(",", ".")
 
-        review_match = re.search(r"\(([\d,]+)\)", block_text)
-        if review_match:
-            review_count = review_match.group(1).replace(",", "")
+        review_count = parse_review_count_text(combined_text)
     except Exception:
         pass
 
@@ -138,48 +182,81 @@ def get_images(detail_page, max_images: int = 6):
     """
     Collects listing photo URLs from the business's Google Maps page.
 
-    Google lazy-loads the photo strip: only the first (hero) photo has a
-    real src on initial load, the rest carry a placeholder until scrolled
-    into view. We nudge the page with a few small scroll/wait cycles first
-    to force those thumbnails to swap in their real src before reading it.
-
-    We also check data-src/data-lazy-src as a fallback, since some lazy-load
-    implementations keep the real URL there until the src swap happens, and
-    we validate that whatever we capture actually looks like a complete
-    Google-hosted image URL rather than a lazy-load placeholder stub.
+    Primary approach: click the hero photo to open the full photo gallery
+    overlay, which renders many more images directly into the DOM than the
+    lazy horizontal carousel on the main listing view. Falls back to
+    scroll-nudging the page if no gallery could be opened.
     """
     images = []
 
-    for _ in range(4):
+    gallery_opened = False
+    for sel in ["button[jsaction*='heroHeaderImage']", "button.aoRNLd", "div.RZ66Rb img"]:
         try:
-            detail_page.mouse.wheel(0, 400)
-        except Exception:
+            detail_page.locator(sel).first.click(timeout=2500)
+            detail_page.wait_for_timeout(1200)
+            gallery_opened = True
             break
-        detail_page.wait_for_timeout(500)
+        except Exception:
+            continue
 
-    try:
-        imgs = detail_page.locator("img")
-        count = imgs.count()
-        for i in range(count):
+    if gallery_opened:
+        try:
+            for _ in range(4):
+                detail_page.mouse.wheel(0, 600)
+                detail_page.wait_for_timeout(400)
+
+            imgs = detail_page.locator("img")
+            count = imgs.count()
+            for i in range(count):
+                try:
+                    el = imgs.nth(i)
+                    src = el.get_attribute("src") or ""
+                    if "googleusercontent.com" not in src:
+                        src = el.get_attribute("data-src") or el.get_attribute("data-lazy-src") or ""
+                except Exception:
+                    continue
+
+                if src.startswith("http") and "googleusercontent.com" in src and src not in images:
+                    images.append(src)
+
+                if len(images) >= max_images:
+                    break
+        except Exception:
+            pass
+
+        try:
+            detail_page.keyboard.press("Escape")
+            detail_page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+    if not images:
+        for _ in range(4):
             try:
-                el = imgs.nth(i)
-                src = el.get_attribute("src") or ""
-                if "googleusercontent.com" not in src:
-                    src = el.get_attribute("data-src") or el.get_attribute("data-lazy-src") or ""
+                detail_page.mouse.wheel(0, 400)
             except Exception:
-                continue
-
-            if (
-                src.startswith("http")
-                and "googleusercontent.com" in src
-                and src not in images
-            ):
-                images.append(src)
-
-            if len(images) >= max_images:
                 break
-    except Exception:
-        pass
+            detail_page.wait_for_timeout(500)
+
+        try:
+            imgs = detail_page.locator("img")
+            count = imgs.count()
+            for i in range(count):
+                try:
+                    el = imgs.nth(i)
+                    src = el.get_attribute("src") or ""
+                    if "googleusercontent.com" not in src:
+                        src = el.get_attribute("data-src") or el.get_attribute("data-lazy-src") or ""
+                except Exception:
+                    continue
+
+                if src.startswith("http") and "googleusercontent.com" in src and src not in images:
+                    images.append(src)
+
+                if len(images) >= max_images:
+                    break
+        except Exception:
+            pass
 
     return images
 
@@ -298,14 +375,17 @@ def scrape(query: str, max_results: int = 20) -> list[dict]:
                 except Exception:
                     website = ""
 
-                # Social links + brand images + contact email come from the
-                # business's own website, not Maps — a separate fetch that
-                # can fail independently (site down, no website, blocks
-                # bots). It must never take down the rest of the scrape,
-                # so it gets its own try/except here.
+                # Social links + brand images + contact email: prefer the
+                # business's own website when it exists (most accurate,
+                # via social_scraper.py). If there's no website, fall back
+                # to DuckDuckGo search instead of leaving these fields
+                # empty. Either path can fail independently and must never
+                # take down the rest of the scrape, so each gets its own
+                # try/except.
                 social_links = {}
                 website_images = {"og_image": None, "favicon": None, "logo": None, "gallery": []}
                 email = None
+
                 if website:
                     try:
                         intel = extract_site_intel(website)
@@ -314,11 +394,18 @@ def scrape(query: str, max_results: int = 20) -> list[dict]:
                         email = intel.get("email")
                     except Exception as e:
                         logger.info(f"[scrape] Site intel extraction failed for {website}: {e}")
+                else:
+                    try:
+                        fallback = get_ddg_fallback_intel(name, address)
+                        social_links = fallback["social_links"]
+                        website_images["gallery"] = fallback["images"]
+                    except Exception as e:
+                        logger.info(f"[scrape] DDG fallback lookup failed for '{name}': {e}")
 
                 # Merge image sources: Maps listing photos first (usually
                 # higher quality, actual venue photos), then the website's
-                # own logo/og-image/gallery as a fallback/supplement —
-                # deduplicated while preserving order.
+                # own logo/og-image/gallery (or the DDG fallback gallery)
+                # as a supplement — deduplicated while preserving order.
                 combined_images = list(maps_images)
                 for extra in [website_images["logo"], website_images["og_image"], *website_images["gallery"]]:
                     if extra and extra not in combined_images:
